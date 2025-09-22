@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 Access Point Mode</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
+    .status-card { background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; margin: 20px 0; }
+    .status-title { color: #dc3545; font-size: 18px; font-weight: bold; margin-bottom: 10px; }
+    .status-info { color: #6c757d; margin-bottom: 15px; }
+    .action-buttons { margin-top: 20px; }
+    .btn { display: inline-block; padding: 10px 20px; margin: 5px; text-decoration: none; border-radius: 4px; }
+    .btn-primary { background-color: #007bff; color: white; }
+    .btn-secondary { background-color: #6c757d; color: white; }
+    .btn:hover { opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <h1>🔧 ESP32 Configuration Mode</h1>
+  
+  <div class="status-card">
+    <div class="status-title">⚠️ Access Point Mode Active</div>
+    <div class="status-info">
+      The ESP32 is currently running in Access Point mode because it couldn't connect to your Wi-Fi network.
+    </div>
+  </div>
+  
+  <div class="status-card">
+    <div class="status-title">📡 Network Information</div>
+    <div class="status-info">
+      <strong>SSID:</strong> <span id="ap-ssid">Loading...</span><br>
+      <strong>IP Address:</strong> <span id="ap-ip">Loading...</span><br>
+      <strong>Password:</strong> ruuvi1234
+    </div>
+  </div>
+  
+  <div class="action-buttons">
+    <a href="/config" class="btn btn-primary">Configure Wi-Fi</a>
+    <a href="/" class="btn btn-secondary">Dashboard</a>
+  </div>
+  
+  <script>
+    // Update network info
+    document.getElementById('ap-ssid').textContent = window.location.hostname.includes('.local') ? 'RuuviSetup-XXXX' : 'RuuviSetup-XXXX';
+    document.getElementById('ap-ip').textContent = window.location.hostname;
+  </script>
+</body>
+</html>

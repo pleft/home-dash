@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>File Upload</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
+    form { border: 2px dashed #ccc; padding: 20px; text-align: center; border-radius: 8px; }
+    input[type="file"] { margin: 10px 0; }
+    button { background-color: #28a745; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+    button:hover { background-color: #218838; }
+    .links { margin-top: 20px; }
+    .links a { color: #007bff; text-decoration: none; margin-right: 15px; }
+    .links a:hover { text-decoration: underline; }
+    .tip { background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin-top: 15px; }
+  </style>
+</head>
+<body>
+  <h2>Upload File to LittleFS</h2>
+  
+  <form method="POST" action="/upload" enctype="multipart/form-data">
+    <input type="file" name="file" required>
+    <br><br>
+    <button type="submit">Upload File</button>
+  </form>
+  
+  <div class="tip">
+    <strong>💡 Tip:</strong> Upload <code>wifi.properties</code> and/or <code>names.csv</code> files.
+  </div>
+  
+  <div class="links">
+    <a href="/">← Back to Dashboard</a>
+    <a href="/config">Wi-Fi Config</a>
+  </div>
+</body>
+</html>

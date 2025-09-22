@@ -1,0 +1,27 @@
+# ESP32 Build Directory
+build/
+
+# Arduino CLI Binary
+bin/
+
+# Data Files
+data/wifi.properties
+
+# Arduino IDE
+*.ino.bak
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDE Files
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Temporary Files
+*.tmp
+*.temp
+*.bin
