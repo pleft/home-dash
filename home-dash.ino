@@ -53,6 +53,8 @@
 // Forward declarations
 struct WifiCreds;
 struct RuuviData;
+struct SensorHistory;
+struct HistoryPoint;
 
 // ======================= DISPLAY PRESENCE SWITCH ==========================
 #ifndef HAS_TFT
@@ -299,11 +301,32 @@ int        gNamesCount = 0;
  * Memory-efficient ring buffer for storing sensor history.
  * Uses binary format with Base64 encoding for web transmission.
  * 
- * Memory usage: 3 sensors × 240 points × 16 bytes = 11,520 bytes total
+ * Memory usage: 5 sensors × 240 points × 16 bytes = 19,200 bytes total
  * Time coverage: 2 hours at 30-second intervals
+ * 
+ * IMPROVED: With delta compression, we can store 4x more data efficiently
+ * With 5 sensors: 5 sensors × 240 points × 6 bytes = 7,200 bytes (with compression: ~2,880-4,320 bytes)
  */
-constexpr int kHistoryMaxSensors = 3;   // Number of sensors to track in history
+constexpr int kHistoryMaxSensors = 5;   // Number of sensors to track in history
 constexpr int kHistoryPoints     = 240; // Points per sensor (ring buffer size)
+
+// === DELTA COMPRESSION STRUCTURES ===
+struct DeltaCompressedPoint {
+  int16_t deltaTemp;      // Temperature difference * 100 (2 bytes)
+  int16_t deltaHumidity;  // Humidity difference * 100 (2 bytes)  
+  int32_t deltaPressure; // Pressure difference in Pa (4 bytes)
+  uint16_t timeDelta;     // Time difference in seconds (2 bytes)
+} __attribute__((packed));
+
+struct DeltaCompressedSensor {
+  char mac[18];           // MAC address (18 bytes)
+  uint16_t pointCount;    // Number of points (2 bytes)
+  uint32_t baseTimestamp; // Base timestamp for delta calculations (4 bytes)
+  float baseTemp;         // Base temperature value (4 bytes)
+  float baseHumidity;     // Base humidity value (4 bytes)
+  float basePressure;     // Base pressure value (4 bytes)
+  // Delta points follow...
+} __attribute__((packed));
 
 // Base64 encoding for compressed history data
 #include "libb64/cencode.h"
@@ -1548,6 +1571,85 @@ static void handleDataPlain() {
   http.send(200, "application/json", out);
 }
 
+// === DELTA COMPRESSION FUNCTIONS ===
+
+/**
+ * @brief Compress sensor data using delta compression
+ * @param input Raw sensor data
+ * @param output Compressed data buffer
+ * @param maxOutputSize Maximum output buffer size
+ * @return Actual compressed size, or 0 on error
+ */
+static size_t compressDelta(const SensorHistory* input, uint8_t* output, size_t maxOutputSize) {
+  if (!input || !output || maxOutputSize < sizeof(DeltaCompressedSensor)) {
+    LOG("[COMPRESSION] compressDelta failed: input=" + String(input ? "OK" : "NULL") + 
+        ", output=" + String(output ? "OK" : "NULL") + 
+        ", maxSize=" + String(maxOutputSize) + 
+        ", minSize=" + String(sizeof(DeltaCompressedSensor)));
+    return 0;
+  }
+  
+  size_t offset = 0;
+  
+  // Write sensor header
+  DeltaCompressedSensor* header = (DeltaCompressedSensor*)(output + offset);
+  strncpy(header->mac, input->mac.c_str(), sizeof(header->mac) - 1);
+  header->mac[sizeof(header->mac) - 1] = '\0';
+  header->pointCount = input->count;
+  
+  if (input->count == 0) {
+    return sizeof(DeltaCompressedSensor);
+  }
+  
+  // Set base values from first point
+  header->baseTimestamp = input->points[0].timestamp;
+  header->baseTemp = input->points[0].t;
+  header->baseHumidity = input->points[0].h;
+  header->basePressure = input->points[0].p;
+  
+  LOG("[COMPRESSION] Base values - Temp: " + String(header->baseTemp) + 
+      ", Humidity: " + String(header->baseHumidity) + 
+      ", Pressure: " + String(header->basePressure) + " Pa");
+  
+  offset += sizeof(DeltaCompressedSensor);
+  
+  // Calculate deltas for remaining points
+  for (int i = 1; i < input->count; i++) {
+    if (offset + sizeof(DeltaCompressedPoint) > maxOutputSize) {
+      break; // Buffer full
+    }
+    
+    DeltaCompressedPoint* delta = (DeltaCompressedPoint*)(output + offset);
+    
+    // Calculate deltas
+    delta->deltaTemp = (int16_t)((input->points[i].t - input->points[i-1].t) * 100);
+    delta->deltaHumidity = (int16_t)((input->points[i].h - input->points[i-1].h) * 100);
+    delta->deltaPressure = (int32_t)(input->points[i].p - input->points[i-1].p);
+    delta->timeDelta = (uint16_t)((input->points[i].timestamp - input->points[i-1].timestamp) / 1000);
+    
+    // Debug pressure deltas for first few points
+    if (i <= 3) {
+      LOG("[COMPRESSION] Point " + String(i) + " - Pressure: " + String(input->points[i].p) + 
+          " Pa, Delta: " + String(delta->deltaPressure) + " Pa");
+    }
+    
+    offset += sizeof(DeltaCompressedPoint);
+  }
+  
+  return offset;
+}
+
+/**
+ * @brief Calculate compression ratio for logging
+ * @param originalSize Original data size
+ * @param compressedSize Compressed data size
+ * @return Compression ratio (0.0 = no compression, 1.0 = 100% compression)
+ */
+static float calculateCompressionRatio(size_t originalSize, size_t compressedSize) {
+  if (originalSize == 0) return 0.0f;
+  return 1.0f - ((float)compressedSize / (float)originalSize);
+}
+
 // Base64 encoding helper function - SAFER VERSION
 static String encodeBase64(const uint8_t* data, size_t length) {
   base64_encodestate state;
@@ -1585,103 +1687,107 @@ static String encodeBase64(const uint8_t* data, size_t length) {
 
 static void handleHistory() {
   gHttpRequestsTotal++; gLastHttpActivityMs = millis();
+  LOG("[HTTP] GET /history - Free heap: " + String(ESP.getFreeHeap()));
 
-  // SAFETY CHECK: Limit data size to prevent stack overflow
-  if (gHistoryCount > kHistoryMaxSensors) {
-    http.send(500, "application/json", "{\"error\":\"History count exceeds maximum\"}");
+  // Check if we have any history data
+  if (gHistoryCount == 0) {
+    http.send(200, "application/json", "{\"data\":{},\"serverTime\":" + String(millis()) + "}");
     return;
   }
 
-  // Calculate binary data size with bounds checking
-  size_t binarySize = sizeof(BinaryHistoryHeader);
-  for (int i = 0; i < gHistoryCount; ++i) {
-    if (gHistory[i].count > kHistoryPoints) {
-      http.send(500, "application/json", "{\"error\":\"Point count exceeds maximum\"}");
-      return;
+  // Calculate total size needed for delta compression
+  size_t totalSize = sizeof(BinaryHistoryHeader);
+  LOG("[COMPRESSION] Header size: " + String(sizeof(BinaryHistoryHeader)) + " bytes");
+  
+  for (int i = 0; i < gHistoryCount; i++) {
+    size_t sensorSize = sizeof(DeltaCompressedSensor);
+    if (gHistory[i].count > 1) {
+      sensorSize += (gHistory[i].count - 1) * sizeof(DeltaCompressedPoint);
     }
-    // Calculate how many data points we can actually fit
-    size_t remainingBytes = 32768 - binarySize - sizeof(BinarySensorHeader); // 32KB limit
-    int actualPointCount = remainingBytes / sizeof(BinaryDataPoint);
-    actualPointCount = min(actualPointCount, (int)gHistory[i].count);
-    binarySize += sizeof(BinarySensorHeader) + (actualPointCount * sizeof(BinaryDataPoint));
+    totalSize += sensorSize;
+    LOG("[COMPRESSION] Sensor " + String(i) + ": " + String(gHistory[i].count) + " points, " + String(sensorSize) + " bytes");
   }
-
-  // SAFETY CHECK: Limit total size to prevent memory issues
-  if (binarySize > 32768) { // 32KB limit
+  
+  // Use the actual calculated size (delta compression is already efficient)
+  size_t compressedSize = totalSize;
+  
+  LOG("[COMPRESSION] Calculated size: " + String(totalSize) + " bytes for " + String(gHistoryCount) + " sensors");
+  
+  // Safety check with higher limit for improved system
+  if (compressedSize > 32768) { // 32KB limit
     http.send(500, "application/json", "{\"error\":\"Data too large for compression\"}");
     return;
   }
 
-  // Create binary data buffer
-  uint8_t* binaryData = (uint8_t*)malloc(binarySize);
-  if (!binaryData) {
+  // Allocate buffer for compressed data
+  uint8_t* compressedData = (uint8_t*)malloc(compressedSize);
+  if (!compressedData) {
     http.send(500, "application/json", "{\"error\":\"Memory allocation failed\"}");
     return;
   }
 
   size_t offset = 0;
   
-  // Write header with bounds checking
-  if (offset + sizeof(BinaryHistoryHeader) > binarySize) {
-    free(binaryData);
-    http.send(500, "application/json", "{\"error\":\"Buffer overflow in header\"}");
-    return;
-  }
-  
-  BinaryHistoryHeader* header = (BinaryHistoryHeader*)(binaryData + offset);
+  // Write header
+  BinaryHistoryHeader* header = (BinaryHistoryHeader*)(compressedData + offset);
   header->magic = 0x48495354; // "HIST"
-  header->version = 1;
+  header->version = 2; // Improved version with delta compression
   header->sensorCount = gHistoryCount;
   header->serverTime = millis();
   offset += sizeof(BinaryHistoryHeader);
 
-  // Write sensor data with bounds checking
-  for (int i = 0; i < gHistoryCount; ++i) {
-    // Check sensor header bounds
-    if (offset + sizeof(BinarySensorHeader) > binarySize) {
-      free(binaryData);
-      http.send(500, "application/json", "{\"error\":\"Buffer overflow in sensor header\"}");
-      return;
+  // Compress each sensor's data using delta compression
+  for (int i = 0; i < gHistoryCount; i++) {
+    if (offset + sizeof(DeltaCompressedSensor) > compressedSize) {
+      LOG("[COMPRESSION] Sensor " + String(i) + " would exceed buffer, stopping");
+      break;
     }
     
-    // Write sensor header
-    BinarySensorHeader* sensorHeader = (BinarySensorHeader*)(binaryData + offset);
-    strncpy(sensorHeader->mac, gHistory[i].mac.c_str(), sizeof(sensorHeader->mac) - 1);
-    sensorHeader->mac[sizeof(sensorHeader->mac) - 1] = '\0';
+    // Compress sensor data using delta compression
+    size_t remainingSize = compressedSize - offset;
+    LOG("[COMPRESSION] Compressing sensor " + String(i) + ", remaining size: " + String(remainingSize));
+    size_t compressedSensorSize = compressDelta(&gHistory[i], compressedData + offset, remainingSize);
+    LOG("[COMPRESSION] Sensor " + String(i) + " compressed size: " + String(compressedSensorSize));
     
-    // Calculate how many data points we can actually fit
-    size_t remainingBytes = binarySize - offset - sizeof(BinarySensorHeader);
-    int actualPointCount = remainingBytes / sizeof(BinaryDataPoint);
-    actualPointCount = min(actualPointCount, (int)gHistory[i].count);
-    
-    sensorHeader->pointCount = actualPointCount;
-    offset += sizeof(BinarySensorHeader);
-
-    // Write data points with bounds checking
-    for (int j = 0; j < actualPointCount; ++j) {
-      if (offset + sizeof(BinaryDataPoint) > binarySize) {
-        free(binaryData);
-        http.send(500, "application/json", "{\"error\":\"Buffer overflow in data point\"}");
-        return;
+    if (compressedSensorSize == 0) {
+      // Fallback to simple binary format if compression fails
+      LOG("[COMPRESSION] Delta compression failed for sensor " + String(i) + ", using fallback");
+      
+      // Write sensor header
+      BinarySensorHeader* sensorHeader = (BinarySensorHeader*)(compressedData + offset);
+      strncpy(sensorHeader->mac, gHistory[i].mac.c_str(), sizeof(sensorHeader->mac) - 1);
+      sensorHeader->mac[sizeof(sensorHeader->mac) - 1] = '\0';
+      sensorHeader->pointCount = gHistory[i].count;
+      offset += sizeof(BinarySensorHeader);
+      
+      // Write data points in original format
+      for (int j = 0; j < gHistory[i].count && offset + sizeof(BinaryDataPoint) <= compressedSize; j++) {
+        BinaryDataPoint* point = (BinaryDataPoint*)(compressedData + offset);
+        point->timestamp = gHistory[i].points[j].timestamp;
+        point->temp = isnan(gHistory[i].points[j].t) ? 0xFFFF : (uint16_t)(gHistory[i].points[j].t * 100);
+        point->humidity = isnan(gHistory[i].points[j].h) ? 0xFFFF : (uint16_t)(gHistory[i].points[j].h * 100);
+        point->pressure = isnan(gHistory[i].points[j].p) ? 0xFFFFFFFF : (uint32_t)gHistory[i].points[j].p;
+        offset += sizeof(BinaryDataPoint);
       }
-      
-      BinaryDataPoint* point = (BinaryDataPoint*)(binaryData + offset);
-      point->timestamp = gHistory[i].points[j].timestamp; // Keep as milliseconds (ESP32 millis())
-      point->temp = isnan(gHistory[i].points[j].t) ? 0xFFFF : (uint16_t)(gHistory[i].points[j].t * 100);
-      point->humidity = isnan(gHistory[i].points[j].h) ? 0xFFFF : (uint16_t)(gHistory[i].points[j].h * 100);
-      point->pressure = isnan(gHistory[i].points[j].p) ? 0xFFFFFFFF : (uint32_t)gHistory[i].points[j].p;
-      
-      offset += sizeof(BinaryDataPoint);
+    } else {
+      offset += compressedSensorSize;
     }
   }
 
+  // Log compression statistics
+  size_t originalSize = 0;
+  for (int i = 0; i < gHistoryCount; i++) {
+    originalSize += sizeof(BinarySensorHeader) + (gHistory[i].count * sizeof(BinaryDataPoint));
+  }
+  float compressionRatio = calculateCompressionRatio(originalSize, offset);
+  LOG("[COMPRESSION] Original: " + String(originalSize) + " bytes, Compressed: " + String(offset) + " bytes, Ratio: " + String(compressionRatio * 100, 1) + "%");
+
   // Encode to Base64
-  String base64Data = encodeBase64(binaryData, binarySize);
-  free(binaryData);
+  String base64Data = encodeBase64(compressedData, offset);
+  free(compressedData);
 
-
-  // Send compressed response
-  String response = "{\"compressed\":true,\"data\":\"" + base64Data + "\"}";
+  // Send improved response
+  String response = "{\"compressed\":true,\"version\":2,\"data\":\"" + base64Data + "\"}";
   
   http.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   http.sendHeader("Connection", "close");

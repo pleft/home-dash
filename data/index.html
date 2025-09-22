@@ -9,7 +9,7 @@
   Features:
   - Real-time sensor data display with auto-refresh
   - Interactive charts with multiple data types (temperature, humidity, pressure, battery, RSSI)
-  - Time window selection (15min to 12hrs) with adaptive data resolution
+  - Time window selection (5min to 8hrs) with adaptive data resolution
   - Mobile-responsive design with card-based layout
   - Live clock and date display
   - ESP32 system monitoring (heap, uptime, network status)
@@ -290,6 +290,8 @@
         <option value="1800000" selected>30 min</option>
         <option value="3600000">1 hour</option>
         <option value="7200000">2 hours</option>
+        <option value="14400000">4 hours</option>
+        <option value="28800000">8 hours</option>
       </select>
     </div>
 

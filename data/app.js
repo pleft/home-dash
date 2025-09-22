@@ -547,7 +547,7 @@ function createSensorCard(tag) {
         </div>
         <div class="metric">
           <span class="metric-label">🔽 Pressure:</span>
-          <span class="metric-value">${tag.p != null ? Number(tag.p).toFixed(0) + ' Pa' : 'N/A'}</span>
+          <span class="metric-value">${tag.p != null ? Number(tag.p / 1000).toFixed(1) + ' kPa' : 'N/A'}</span>
         </div>
         <div class="metric">
           <span class="metric-label">🔋 Battery:</span>
@@ -648,7 +648,7 @@ function getChartTitle() {
   const titles = {
     'temperature': 'Temperature (°C)',
     'humidity': 'Humidity (%)',
-    'pressure': 'Pressure (Pa)'
+    'pressure': 'Pressure (kPa)'
     // Removed battery and RSSI chart options to save space
   };
   return titles[currentChartType] || 'Chart';
@@ -812,6 +812,38 @@ function trimHistory(arr, windowMs) {
   if (arr.length > MAX_POINTS) arr.splice(0, arr.length - MAX_POINTS);
 }
 
+// Calculate relative pressure differences to make variations more visible
+function calculateRelativePressure(data, baselinePressure = null) {
+  if (currentChartType !== 'pressure') {
+    return data;
+  }
+  
+  // Find the first sensor's first pressure value as baseline if not provided
+  if (baselinePressure === null) {
+    for (const [mac, sensorData] of historyByMac.entries()) {
+      if (sensorData.p && sensorData.p.length > 0) {
+        baselinePressure = sensorData.p[0].y;
+        console.log(`Using baseline pressure: ${baselinePressure} kPa`);
+        break;
+      }
+    }
+  }
+  
+  if (baselinePressure === null) {
+    console.log('No baseline pressure found, using original data');
+    return data;
+  }
+  
+  // Convert to relative differences (kPa from baseline)
+  const relativeData = data.map(point => ({
+    x: point.x,
+    y: point.y - baselinePressure
+  }));
+  
+  console.log(`Relative pressure calculation: baseline=${baselinePressure} kPa, first point: ${data[0]?.y} -> ${relativeData[0]?.y} kPa`);
+  return relativeData;
+}
+
 function renderChart() {
   if (!mainChart) {
     console.log('mainChart not available for renderChart, attempting to initialize...');
@@ -886,6 +918,9 @@ function renderChart() {
         y: point.y
       }));
       
+      // Use the converted data directly (no relative calculation needed)
+      const finalData = convertedData;
+      
       console.log(`Data filtering for ${mac}: ${allData.length} total points, ${filteredData.length} after time window filtering, ${validData.length} valid points, ${cleanData.length} clean points`);
       
       if (cleanData.length > 0) {
@@ -895,7 +930,7 @@ function renderChart() {
       
       datasets.push({
         label: displayName,
-        data: convertedData, // Use converted data for linear scale
+        data: finalData, // Use final data (with relative pressure if applicable)
         fill: false,
         tension: 0.15,
         pointRadius: 0,
@@ -1138,7 +1173,7 @@ async function tick() {
           hist.h.push(newPoint);
         }
         if (tag.p != null) {
-          const newPoint = { x: now, y: Number(tag.p) };
+          const newPoint = { x: now, y: Number(tag.p) / 1000 }; // Convert Pa to kPa to match historical data
           hist.p = hist.p.filter(point => Math.abs(point.x - now) > 1000);
           hist.p.push(newPoint);
         }
@@ -1222,7 +1257,7 @@ if ('ontouchstart' in window) {
 
 // === SERVER HISTORY LOADING ===
 
-// Parse binary history data
+// Parse binary history data with support for delta compression
 function parseBinaryHistory(arrayBuffer) {
   const view = new DataView(arrayBuffer);
   let offset = 0;
@@ -1243,70 +1278,192 @@ function parseBinaryHistory(arrayBuffer) {
   
   const result = { serverTime, data: {} };
   
+  console.log(`Parsing binary history: version=${version}, sensors=${sensorCount}, serverTime=${serverTime}`);
+  
   // Read sensor data
-  for (let i = 0; i < sensorCount; i++) {
-    // Check bounds before reading sensor header (20 bytes total)
-    if (offset + 20 > arrayBuffer.byteLength) {
-      console.warn(`Sensor ${i} header would exceed buffer bounds`);
+  if (version === 2) {
+    // New delta compression format - parse all sensors
+    result.data = {};
+    for (let i = 0; i < sensorCount; i++) {
+      console.log(`Parsing sensor ${i}, offset: ${offset}, buffer size: ${arrayBuffer.byteLength}`);
+      const sensorData = parseDeltaCompressedSensor(arrayBuffer, view, offset, i);
+      // Merge sensor data into result
+      Object.assign(result.data, sensorData);
+      // Update offset for next sensor
+      const newOffset = sensorData.offset || offset;
+      console.log(`Sensor ${i} completed, offset: ${offset} -> ${newOffset}`);
+      offset = newOffset;
+    }
+  } else {
+    // Original format (version 1) - parse all sensors
+    result.data = {};
+    for (let i = 0; i < sensorCount; i++) {
+      const sensorData = parseOriginalSensorData(arrayBuffer, view, offset, i);
+      if (sensorData.mac) {
+        result.data[sensorData.mac] = sensorData;
+      }
+      // Update offset for next sensor
+      offset = sensorData.offset || offset;
+    }
+  }
+  
+  return result;
+}
+
+// Parse original sensor data format (version 1)
+function parseOriginalSensorData(arrayBuffer, view, offset, sensorIndex) {
+  const result = {};
+  
+  // Check bounds before reading sensor header (20 bytes total)
+  if (offset + 20 > arrayBuffer.byteLength) {
+    console.warn(`Sensor ${sensorIndex} header would exceed buffer bounds`);
+    return result;
+  }
+  
+  // Read sensor header - MAC address is 18 bytes (including null terminator)
+  const macBytes = new Uint8Array(arrayBuffer.slice(offset, offset + 18));
+  const mac = new TextDecoder().decode(macBytes).replace(/\0/g, '');
+  offset += 18;
+  
+  const pointCount = view.getUint16(offset, true); // Little-endian
+  offset += 2;
+  
+  // Calculate maximum possible points based on remaining buffer space
+  const remainingBytes = arrayBuffer.byteLength - offset;
+  const maxPossiblePoints = Math.floor(remainingBytes / 12); // 12 bytes per data point
+  const actualPointCount = Math.min(pointCount, maxPossiblePoints);
+  
+  if (pointCount > maxPossiblePoints) {
+    console.warn(`Sensor ${sensorIndex}: Reported ${pointCount} points but only ${maxPossiblePoints} can fit in buffer`);
+  }
+  
+  const sensorData = { t: [], h: [], p: [] };
+  
+  // Read data points
+  for (let j = 0; j < actualPointCount; j++) {
+    // Check bounds before reading each data point (12 bytes total)
+    if (offset + 12 > arrayBuffer.byteLength) {
+      console.warn(`Data point ${j} would exceed buffer bounds, stopping at ${j}/${actualPointCount} points`);
       break;
     }
     
-    // Read sensor header - MAC address is 18 bytes (including null terminator)
-    const macBytes = new Uint8Array(arrayBuffer.slice(offset, offset + 18));
-    const mac = new TextDecoder().decode(macBytes).replace(/\0/g, '');
-    offset += 18;
+    const timestamp = view.getUint32(offset, true); // ESP32 millis() - milliseconds since boot (little-endian)
+    offset += 4;
     
-    const pointCount = view.getUint16(offset, true); // Little-endian
+    const temp = view.getUint16(offset, true); // Little-endian
     offset += 2;
+    const humidity = view.getUint16(offset, true); // Little-endian
+    offset += 2;
+    const pressure = view.getUint32(offset, true); // Little-endian
+    offset += 4;
     
-    // Calculate maximum possible points based on remaining buffer space
-    const remainingBytes = arrayBuffer.byteLength - offset;
-    const maxPossiblePoints = Math.floor(remainingBytes / 12); // 12 bytes per data point
-    const actualPointCount = Math.min(pointCount, maxPossiblePoints);
-    
-    if (pointCount > maxPossiblePoints) {
-      console.warn(`Sensor ${i}: Reported ${pointCount} points but only ${maxPossiblePoints} can fit in buffer`);
+    // Convert back to original values with data validation
+    // Temperature: stored as (temp * 100) as int16, so divide by 100
+    if (temp !== 0xFFFF && temp < 10000) { // Valid temp range: -100°C to +100°C
+      sensorData.t.push({ x: timestamp, y: temp / 100 });
     }
-    
-    const sensorData = { t: [], h: [], p: [] };
-    
-    // Read data points
-    for (let j = 0; j < actualPointCount; j++) {
-      // Check bounds before reading each data point (12 bytes total)
-      if (offset + 12 > arrayBuffer.byteLength) {
-        console.warn(`Data point ${j} would exceed buffer bounds, stopping at ${j}/${actualPointCount} points`);
-        break;
-      }
-      
-      const timestamp = view.getUint32(offset, true); // ESP32 millis() - milliseconds since boot (little-endian)
-      offset += 4;
-      
-      const temp = view.getUint16(offset, true); // Little-endian
-      offset += 2;
-      const humidity = view.getUint16(offset, true); // Little-endian
-      offset += 2;
-      const pressure = view.getUint32(offset, true); // Little-endian
-      offset += 4;
-      
-      // Convert back to original values with data validation
-      // Temperature: stored as (temp * 100) as int16, so divide by 100
-      if (temp !== 0xFFFF && temp < 10000) { // Valid temp range: -100°C to +100°C
-        sensorData.t.push({ x: timestamp, y: temp / 100 });
-      }
-      // Humidity: stored as (humidity * 100) as int16, so divide by 100
-      if (humidity !== 0xFFFF && humidity <= 10000) { // Valid humidity range: 0% to 100%
-        sensorData.h.push({ x: timestamp, y: humidity / 100 });
-      }
-      // Pressure: stored as Pa (Pascal), convert to kPa
-      // Normal atmospheric pressure is ~101,325 Pa (101.325 kPa)
-      if (pressure !== 0xFFFFFFFF && pressure > 80000 && pressure < 120000) { // Valid pressure range: 80-120 kPa
-        sensorData.p.push({ x: timestamp, y: pressure / 1000 }); // Convert Pa to kPa
-      }
+    // Humidity: stored as (humidity * 100) as int16, so divide by 100
+    if (humidity !== 0xFFFF && humidity <= 10000) { // Valid humidity range: 0% to 100%
+      sensorData.h.push({ x: timestamp, y: humidity / 100 });
     }
-    
-    result.data[mac] = sensorData;
+    // Pressure: stored as Pa (Pascal), convert to kPa
+    // Normal atmospheric pressure is ~101,325 Pa (101.325 kPa)
+    if (pressure !== 0xFFFFFFFF && pressure > 80000 && pressure < 120000) { // Valid pressure range: 80-120 kPa
+      sensorData.p.push({ x: timestamp, y: pressure / 1000 }); // Convert Pa to kPa
+    }
   }
   
+  result.mac = mac;
+  result.t = sensorData.t;
+  result.h = sensorData.h;
+  result.p = sensorData.p;
+  result.offset = offset; // Return updated offset for next sensor
+  return result;
+}
+
+// Parse delta compressed sensor data (version 2)
+function parseDeltaCompressedSensor(arrayBuffer, view, offset, sensorIndex) {
+  const result = {};
+  
+  // Read delta compressed sensor header (36 bytes total)
+  if (offset + 36 > arrayBuffer.byteLength) {
+    console.warn(`Delta sensor ${sensorIndex} header would exceed buffer bounds (offset: ${offset}, buffer: ${arrayBuffer.byteLength})`);
+    return result;
+  }
+  
+  // Read sensor header
+  const macBytes = new Uint8Array(arrayBuffer.slice(offset, offset + 18));
+  const mac = new TextDecoder().decode(macBytes).replace(/\0/g, '');
+  offset += 18;
+  
+  const pointCount = view.getUint16(offset, true); // Little-endian
+  offset += 2;
+  
+  let baseTimestamp = view.getUint32(offset, true); // Little-endian
+  offset += 4;
+  
+  let baseTemp = view.getFloat32(offset, true); // Little-endian
+  offset += 4;
+  
+  let baseHumidity = view.getFloat32(offset, true); // Little-endian
+  offset += 4;
+  
+  let basePressure = view.getFloat32(offset, true); // Little-endian
+  offset += 4;
+  
+  console.log(`Delta sensor ${sensorIndex}: ${mac}, points=${pointCount}, baseTemp=${baseTemp}, baseHumidity=${baseHumidity}, basePressure=${basePressure}`);
+  console.log(`Pressure in kPa: ${basePressure / 1000}`);
+  
+  const sensorData = { t: [], h: [], p: [] };
+  
+  // Add base point
+  sensorData.t.push({ x: baseTimestamp, y: baseTemp });
+  sensorData.h.push({ x: baseTimestamp, y: baseHumidity });
+  sensorData.p.push({ x: baseTimestamp, y: basePressure / 1000 }); // Convert Pa to kPa
+  
+  // Read delta points
+  for (let j = 1; j < pointCount; j++) {
+    // Check bounds before reading each delta point (10 bytes total)
+    if (offset + 10 > arrayBuffer.byteLength) {
+      console.warn(`Delta point ${j} would exceed buffer bounds, stopping at ${j}/${pointCount} points (offset: ${offset}, buffer: ${arrayBuffer.byteLength})`);
+      break;
+    }
+    
+    const deltaTemp = view.getInt16(offset, true); // Little-endian
+    offset += 2;
+    const deltaHumidity = view.getInt16(offset, true); // Little-endian
+    offset += 2;
+    const deltaPressure = view.getInt32(offset, true); // Little-endian
+    offset += 4;
+    const timeDelta = view.getUint16(offset, true); // Little-endian
+    offset += 2;
+    
+    // Reconstruct values from deltas
+    const timestamp = baseTimestamp + (timeDelta * 1000); // Convert seconds to milliseconds
+    const temp = baseTemp + (deltaTemp / 100.0);
+    const humidity = baseHumidity + (deltaHumidity / 100.0);
+    const pressure = basePressure + deltaPressure;
+    
+    // Debug pressure reconstruction
+    if (j <= 3) { // Only log first few points to avoid spam
+      console.log(`Point ${j}: deltaPressure=${deltaPressure}, pressure=${pressure}, pressure_kPa=${pressure / 1000}`);
+    }
+    
+    // Add reconstructed point
+    sensorData.t.push({ x: timestamp, y: temp });
+    sensorData.h.push({ x: timestamp, y: humidity });
+    sensorData.p.push({ x: timestamp, y: pressure / 1000 }); // Convert Pa to kPa
+    
+    // Update base values for next iteration
+    baseTimestamp = timestamp;
+    baseTemp = temp;
+    baseHumidity = humidity;
+    basePressure = pressure;
+  }
+  
+  result[mac] = sensorData;
+  result.offset = offset; // Return updated offset for next sensor
+  console.log(`Delta sensor ${sensorIndex} completed, final offset: ${offset}, buffer size: ${arrayBuffer.byteLength}`);
   return result;
 }
 
