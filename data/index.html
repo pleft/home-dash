@@ -173,10 +173,14 @@
           if (isIPad) {
             console.log('iPad with working Chart.js - excellent!');
             // iPad-specific Chart.js optimizations
-            if (Chart.defaults) {
-              Chart.defaults.responsive = true;
-              Chart.defaults.maintainAspectRatio = false;
-              Chart.defaults.animation = false; // Disable animations on iPad
+            try {
+              if (Chart.defaults) {
+                Chart.defaults.responsive = true;
+                Chart.defaults.maintainAspectRatio = false;
+                Chart.defaults.animation = false; // Disable animations on iPad
+              }
+            } catch (e) {
+              console.log('Chart.js optimization error (non-critical):', e);
             }
           }
         }

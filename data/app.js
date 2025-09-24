@@ -602,14 +602,14 @@ function makeChart(ctx) {
         x: {
           type: 'linear', // Use linear instead of time to avoid date adapter issues
           title: { display: true, text: 'Time (minutes ago)' },
-          reverse: true, // Reverse axis so "now" (0) is on the right, past on the left
+          reverse: false, // Normal axis so past is on the left, "now" on the right
           ticks: { 
             autoSkip: true, 
             maxTicksLimit: 8,
             callback: function(value) {
-              // Convert to minutes ago format
-              const minutes = Math.round(value);
-              return minutes === 0 ? 'Now' : `${minutes}m ago`;
+              // FIXED: Handle negative values (past) and zero (now)
+              const minutes = Math.round(Math.abs(value));
+              return value === 0 ? 'Now' : `${minutes}m ago`;
             }
           }
         },
@@ -629,8 +629,8 @@ function makeChart(ctx) {
           intersect: false,
           callbacks: {
             title: function(context) {
-              const minutes = Math.round(context[0].parsed.x);
-              return minutes === 0 ? 'Now' : `${minutes} minutes ago`;
+              const minutes = Math.round(Math.abs(context[0].parsed.x));
+              return context[0].parsed.x === 0 ? 'Now' : `${minutes} minutes ago`;
             },
             label: function(context) {
               const label = context.dataset.label || '';
@@ -883,6 +883,7 @@ function renderChart() {
   console.log(`Time window: ${windowMs/1000/60} minutes, cutoff: ${new Date(cutoff).toISOString()}, earliest data: ${new Date(earliestTime).toISOString()}`);
   console.log(`Actual window start: ${new Date(actualWindowStart).toISOString()}`);
   console.log(`Effective window start: ${new Date(effectiveWindowStart).toISOString()}`);
+  console.log(`Chart data flow: Past (left, negative values) → Present (right, zero)`);
   
   // Inform user about data availability
   const availableDataMinutes = (Date.now() - earliestTime) / 1000 / 60;
@@ -914,7 +915,7 @@ function renderChart() {
       // Convert timestamps to "minutes ago" for linear scale
       const now = Date.now();
       const convertedData = cleanData.map(point => ({
-        x: (now - point.x) / (1000 * 60), // Convert to minutes ago
+        x: (point.x - now) / (1000 * 60), // FIXED: Inverted to show past (negative) to present (0) from left to right
         y: point.y
       }));
       
@@ -967,7 +968,7 @@ function renderChart() {
       // Convert timestamps to "minutes ago" for linear scale
       const now = Date.now();
       const convertedData = cleanData.map(point => ({
-        x: (now - point.x) / (1000 * 60), // Convert to minutes ago
+        x: (point.x - now) / (1000 * 60), // FIXED: Inverted to show past (negative) to present (0) from left to right
         y: point.y
       }));
       
@@ -1006,7 +1007,7 @@ function renderChart() {
   console.log(`Chart updated with ${datasets.length} datasets`);
   if (datasets.length > 0 && datasets[0].data.length > 0) {
     console.log(`First dataset has ${datasets[0].data.length} data points`);
-    console.log(`X-axis range: ${datasets[0].data[0].x} to ${datasets[0].data[datasets[0].data.length-1].x} minutes ago`);
+    console.log(`X-axis range: ${datasets[0].data[0].x} to ${datasets[0].data[datasets[0].data.length-1].x} (past to present)`);
   }
   
   mainChart.update();
@@ -1125,6 +1126,9 @@ function safeFetch(url, options = {}) {
 async function tick() {
   if (inFlight) return; // prevent overlaps
   inFlight = true;
+  
+  // Clean up history data at midnight to prevent date boundary issues
+  cleanupHistoryAtMidnight();
   console.log('Attempting to fetch sensor data...');
   try {
     const r = await safeFetch('/data', { 
@@ -1257,16 +1261,52 @@ if ('ontouchstart' in window) {
 
 // === SERVER HISTORY LOADING ===
 
+// Midnight cleanup function to prevent date boundary issues
+function cleanupHistoryAtMidnight() {
+  const now = new Date();
+  const currentDay = now.getDate();
+  
+  // Check if we've crossed a day boundary since last cleanup
+  if (window.lastCleanupDay && window.lastCleanupDay !== currentDay) {
+    console.log('Day boundary detected, cleaning up old historical data');
+    
+    // Remove any data points that are more than 24 hours old
+    const cutoffTime = Date.now() - (24 * 60 * 60 * 1000);
+    
+    for (const [mac, hist] of historyByMac.entries()) {
+      for (const [dataType, points] of Object.entries(hist)) {
+        if (Array.isArray(points)) {
+          // Filter out old data points
+          const validPoints = points.filter(point => point.x > cutoffTime);
+          hist[dataType] = validPoints;
+          console.log(`Cleaned ${mac} ${dataType}: ${points.length} -> ${validPoints.length} points`);
+        }
+      }
+    }
+  }
+  
+  window.lastCleanupDay = currentDay;
+}
+
 // Parse binary history data with support for delta compression
 function parseBinaryHistory(arrayBuffer) {
+  // Validate input
+  if (!arrayBuffer || arrayBuffer.byteLength < 12) {
+    throw new Error('Invalid binary data: too small or null');
+  }
+  
   const view = new DataView(arrayBuffer);
   let offset = 0;
   
-  // Read header
+  // Read header with bounds checking
+  if (offset + 4 > arrayBuffer.byteLength) {
+    throw new Error('Invalid binary data: header too small');
+  }
+  
   const magic = view.getUint32(offset, true); // Little-endian (ESP32 format)
   offset += 4;
   if (magic !== 0x48495354) { // "HIST"
-    throw new Error('Invalid binary format magic');
+    throw new Error(`Invalid binary format magic: 0x${magic.toString(16)}, expected 0x48495354`);
   }
   
   const version = view.getUint16(offset, true); // Little-endian
@@ -1275,6 +1315,17 @@ function parseBinaryHistory(arrayBuffer) {
   offset += 2;
   const serverTime = view.getUint32(offset, true); // Little-endian
   offset += 4;
+  
+  // Validate parsed values
+  if (version < 1 || version > 2) {
+    throw new Error(`Unsupported version: ${version}`);
+  }
+  if (sensorCount < 0 || sensorCount > 10) { // Reasonable limit
+    throw new Error(`Invalid sensor count: ${sensorCount}`);
+  }
+  if (serverTime < 0 || serverTime > 4294967295) { // uint32 max
+    throw new Error(`Invalid server time: ${serverTime}`);
+  }
   
   const result = { serverTime, data: {} };
   
@@ -1287,12 +1338,20 @@ function parseBinaryHistory(arrayBuffer) {
     for (let i = 0; i < sensorCount; i++) {
       console.log(`Parsing sensor ${i}, offset: ${offset}, buffer size: ${arrayBuffer.byteLength}`);
       const sensorData = parseDeltaCompressedSensor(arrayBuffer, view, offset, i);
-      // Merge sensor data into result
-      Object.assign(result.data, sensorData);
-      // Update offset for next sensor
-      const newOffset = sensorData.offset || offset;
-      console.log(`Sensor ${i} completed, offset: ${offset} -> ${newOffset}`);
-      offset = newOffset;
+      // FIXED: Proper data structure handling for delta compressed format
+      if (sensorData && Object.keys(sensorData).length > 0) {
+        // sensorData should contain MAC address as key, not be merged directly
+        for (const [mac, data] of Object.entries(sensorData)) {
+          if (mac !== 'offset' && data && typeof data === 'object') {
+            result.data[mac] = data;
+          }
+        }
+      }
+      // FIXED: Always use returned offset, don't fallback to current offset
+      if (sensorData.offset !== undefined) {
+        offset = sensorData.offset;
+      }
+      console.log(`Sensor ${i} completed, offset: ${offset}, data keys: ${Object.keys(sensorData)}`);
     }
   } else {
     // Original format (version 1) - parse all sensors
@@ -1388,6 +1447,7 @@ function parseDeltaCompressedSensor(arrayBuffer, view, offset, sensorIndex) {
   // Read delta compressed sensor header (36 bytes total)
   if (offset + 36 > arrayBuffer.byteLength) {
     console.warn(`Delta sensor ${sensorIndex} header would exceed buffer bounds (offset: ${offset}, buffer: ${arrayBuffer.byteLength})`);
+    result.offset = offset; // Return current offset even on error
     return result;
   }
   
@@ -1461,9 +1521,14 @@ function parseDeltaCompressedSensor(arrayBuffer, view, offset, sensorIndex) {
     basePressure = pressure;
   }
   
-  result[mac] = sensorData;
+  // FIXED: Store sensor data with MAC address as key (consistent with v1 format)
+  if (mac && mac.length > 0) {
+    result[mac] = sensorData;
+  } else {
+    console.warn(`Delta sensor ${sensorIndex}: Invalid MAC address: "${mac}"`);
+  }
   result.offset = offset; // Return updated offset for next sensor
-  console.log(`Delta sensor ${sensorIndex} completed, final offset: ${offset}, buffer size: ${arrayBuffer.byteLength}`);
+  console.log(`Delta sensor ${sensorIndex} completed, MAC: ${mac}, final offset: ${offset}, buffer size: ${arrayBuffer.byteLength}`);
   return result;
 }
 
@@ -1511,18 +1576,36 @@ async function loadHistoryFromServer() {
     
     // Check if data is compressed
     if (responseData.compressed && responseData.data) {
-      // Decode Base64 data using browser's built-in atob() function
-      const binaryString = atob(responseData.data);
-      
-      // Convert binary string to Uint8Array more efficiently
-      const binaryData = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        binaryData[i] = binaryString.charCodeAt(i) & 0xFF; // Ensure we only get the lower 8 bits
+      try {
+        // Decode Base64 data using browser's built-in atob() function
+        const binaryString = atob(responseData.data);
+        
+        // Validate decoded data size
+        if (binaryString.length === 0) {
+          console.warn('Decoded binary data is empty');
+          return;
+        }
+        
+        // Convert binary string to Uint8Array more efficiently
+        const binaryData = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          binaryData[i] = binaryString.charCodeAt(i) & 0xFF; // Ensure we only get the lower 8 bits
+        }
+        
+        // Parse binary format - use the buffer directly
+        const arrayBuffer = binaryData.buffer;
+        responseData = parseBinaryHistory(arrayBuffer);
+        
+        // Validate parsed data
+        if (!responseData || !responseData.data) {
+          console.warn('Failed to parse binary history data');
+          return;
+        }
+        
+      } catch (parseError) {
+        console.error('Failed to decode/parse compressed history data:', parseError);
+        return;
       }
-      
-      // Parse binary format - use the buffer directly
-      const arrayBuffer = binaryData.buffer;
-      responseData = parseBinaryHistory(arrayBuffer);
     }
     
     const serverTime = responseData.serverTime; // ESP32 millis() when response was sent
@@ -1542,13 +1625,30 @@ async function loadHistoryFromServer() {
         for (const [key, points] of Object.entries(data)) {
           if (Array.isArray(points)) {
             const convertedPoints = points.map(point => {
-              // Convert ESP32 millis() to real timestamp
-              // serverTime is the ESP32 millis() when the response was sent
-              // point.x is the ESP32 millis() when the data point was recorded
-              // We need to calculate the real timestamp of the data point
-              const realTimestamp = clientTime - (serverTime - point.x);
-              // Convert to "minutes ago" format
-              const minutesAgo = (Date.now() - realTimestamp) / (1000 * 60);
+              // FIXED: Proper ESP32 millis() to real timestamp conversion
+              // ESP32 millis() are relative to boot time, we need to anchor them to real time
+              // serverTime = ESP32 millis() when response was sent
+              // point.x = ESP32 millis() when data was recorded
+              // clientTime = real timestamp when response was received
+              
+              // Calculate the time difference between data recording and response sending
+              const timeDiffMs = serverTime - point.x;
+              
+              // Convert to real timestamp: response time minus the time difference
+              const realTimestamp = clientTime - timeDiffMs;
+              
+              // Validate the timestamp is reasonable (not in future, not too far in past)
+              const now = Date.now();
+              const maxAgeMs = 24 * 60 * 60 * 1000; // 24 hours max
+              if (realTimestamp > now || realTimestamp < (now - maxAgeMs)) {
+                console.warn(`Invalid timestamp detected: realTimestamp=${realTimestamp}, now=${now}, diff=${realTimestamp - now}ms`);
+                // If timestamp seems invalid, use a fallback calculation
+                return {
+                  x: now - (serverTime - point.x), // Fallback: assume data is recent
+                  y: point.y
+                };
+              }
+              
               return {
                 x: realTimestamp, // Store as real timestamp for chart rendering
                 y: point.y
