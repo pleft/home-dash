@@ -6,9 +6,9 @@ ESP32-based IoT dashboard for monitoring RuuviTag environmental sensors with TFT
 
 - **Real-time BLE scanning** for RuuviTag sensors (temperature, humidity, pressure, battery)
 - **TFT display** with card-based sensor layout
-- **Web dashboard** with interactive charts and mobile support
-- **WiFi + AP fallback** mode for easy setup
-- **Adaptive history storage** (15 minutes with 30-second resolution for up to 5 sensors)
+- **Web dashboard** with live sensor cards (charts removed)
+– **WiFi + AP fallback** mode for easy setup
+– History storage and charts removed to simplify the system
 
 ## Hardware Requirements
 
@@ -122,9 +122,7 @@ arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-
 
 - **Program Storage**: ~1.3 MB (66% of available)
 - **Dynamic Memory**: ~58 KB (17% of available)
-- **Update Frequency**: Sensor data every 5s, display every 1s, history save every 30s
-- **Data Compression**: Binary encoding reduces history payload by ~95% compared to JSON
-- **Network Efficiency**: 10x smaller data transfers for historical data
+- **Update Frequency**: Sensor data every 5s, display every 1s
 
 ## Project Structure
 
@@ -147,7 +145,6 @@ home-dash/
 ## API Endpoints
 
 - `GET /data` - Real-time sensor data
-- `GET /history` - Historical data
 - `GET /health` - System metrics
 - `GET /config` - WiFi configuration
 - `GET /upload` - File upload interface

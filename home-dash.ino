@@ -104,11 +104,23 @@ static const char* kApPassword           = "ruuvi1234"; // SoftAP password (mini
 
 // === NTP AND TIMEZONE CONFIGURATION ===
 const char* ntpServer = "pool.ntp.org";                    // NTP server for time synchronization
-const char* timezoneApiUrl = "http://worldtimeapi.org/api/ip"; // API for timezone detection
+const char* timezoneApiUrl = "http://worldtimeapi.org/api/ip"; // Primary API for timezone detection
+const char* timezoneApiUrl2 = "http://ipapi.co/json/";     // Alternative API for timezone detection
+const char* timezoneApiUrl3 = "http://ip-api.com/json/";   // Third fallback API for timezone detection
 static long gTimezoneOffset = 0;                           // Detected timezone offset in seconds
 static bool gTimezoneDetected = false;                     // Whether timezone has been detected
 static unsigned long gTimezoneRetryCount = 0;              // Number of timezone detection attempts
 constexpr unsigned long kMaxTimezoneRetries = 5;           // Maximum retries before fallback
+
+// Manual timezone configuration (set to non-zero to override automatic detection)
+// Examples: 3*3600 = UTC+3, -5*3600 = UTC-5, 0 = UTC
+// To set your timezone manually, change the value below:
+// UTC+1 (Europe): 1*3600 = 3600
+// UTC+2 (Europe): 2*3600 = 7200  
+// UTC+3 (Europe/Middle East): 3*3600 = 10800
+// UTC-5 (US Eastern): -5*3600 = -18000
+// UTC-8 (US Pacific): -8*3600 = -28800
+static long gManualTimezoneOffset = 0;                     // Manual timezone override (0 = auto-detect)
 // ==========================================================================
 
 // --------- Logging ----------
@@ -148,6 +160,16 @@ static bool gTimeInitialized = false;    // Whether NTP time has been synchroniz
  * @note Requires internet connection to work properly
  */
 static void detectTimezone() {
+  // Check for manual timezone override first
+  if (gManualTimezoneOffset != 0) {
+    gTimezoneOffset = gManualTimezoneOffset;
+    gTimezoneDetected = true;
+    configTime(gTimezoneOffset, 0, ntpServer);
+    LOG("[TIMEZONE] Using manual timezone offset: " + String(gTimezoneOffset) + " seconds (" + 
+        String(gTimezoneOffset / 3600) + "h " + String((gTimezoneOffset % 3600) / 60) + "m)");
+    return;
+  }
+  
   // Early exit if already detected or no internet
   if (gTimezoneDetected || WiFi.status() != WL_CONNECTED) {
     return;
@@ -168,11 +190,16 @@ static void detectTimezone() {
   
   HTTPClient http;
   http.begin(timezoneApiUrl);
-  http.setTimeout(5000); // 5 second timeout
+  http.setTimeout(10000); // Increased timeout to 10 seconds
+  http.addHeader("User-Agent", "ESP32-HomeDash/1.0");
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Follow redirects
   
   int httpCode = http.GET();
+  LOG("[TIMEZONE] HTTP response code: " + String(httpCode));
+  
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
+    LOG("[TIMEZONE] API response length: " + String(payload.length()) + " bytes");
     LOG("[TIMEZONE] API response: " + payload);
     
     // Parse JSON response: {"utc_offset":"+03:00",...}
@@ -200,19 +227,212 @@ static void detectTimezone() {
           configTime(gTimezoneOffset, 0, ntpServer);
           LOG("[TIMEZONE] NTP reconfigured with detected timezone");
         } else {
-          LOG("[TIMEZONE] Invalid offset format: " + offsetStr);
+          LOG("[TIMEZONE] Invalid offset format: " + offsetStr + " (length: " + String(offsetStr.length()) + ")");
         }
       } else {
         LOG("[TIMEZONE] Could not find offset end in response");
       }
     } else {
       LOG("[TIMEZONE] Could not find utc_offset in response");
+      // Try alternative field names
+      int altOffsetStart = payload.indexOf("\"utc_offset\":");
+      if (altOffsetStart != -1) {
+        LOG("[TIMEZONE] Found utc_offset without quotes, trying alternative parsing");
+        altOffsetStart += 13; // Skip "utc_offset":
+        int altOffsetEnd = payload.indexOf(",", altOffsetStart);
+        if (altOffsetEnd == -1) altOffsetEnd = payload.indexOf("}", altOffsetStart);
+        if (altOffsetEnd != -1) {
+          String altOffsetStr = payload.substring(altOffsetStart, altOffsetEnd);
+          altOffsetStr.trim();
+          LOG("[TIMEZONE] Alternative offset string: " + altOffsetStr);
+        }
+      }
     }
   } else {
-    LOG("[TIMEZONE] API call failed, code: " + String(httpCode));
+    LOG("[TIMEZONE] Primary API call failed, code: " + String(httpCode));
+    if (httpCode == HTTPC_ERROR_CONNECTION_REFUSED) {
+      LOG("[TIMEZONE] Connection refused - check internet connectivity");
+    } else if (httpCode == HTTPC_ERROR_CONNECTION_LOST) {
+      LOG("[TIMEZONE] Connection lost during request");
+    } else if (httpCode == HTTPC_ERROR_NO_HTTP_SERVER) {
+      LOG("[TIMEZONE] No HTTP server response");
+    } else if (httpCode == HTTPC_ERROR_READ_TIMEOUT) {
+      LOG("[TIMEZONE] Read timeout");
+    }
+    
+    // Try alternative API if primary failed
+    LOG("[TIMEZONE] Trying alternative API...");
+    if (tryAlternativeTimezoneAPI()) {
+      LOG("[TIMEZONE] Alternative API succeeded");
+      return;
+    } else {
+      LOG("[TIMEZONE] Alternative API also failed, trying third API...");
+      if (tryThirdTimezoneAPI()) {
+        LOG("[TIMEZONE] Third API succeeded");
+        return;
+      } else {
+        LOG("[TIMEZONE] All APIs failed");
+      }
+    }
   }
   
   http.end();
+}
+
+/**
+ * @brief Try alternative timezone API (ipapi.co)
+ * 
+ * This function tries the ipapi.co service as a fallback if the primary API fails.
+ * It looks for the "utc_offset" field in the response.
+ */
+static bool tryAlternativeTimezoneAPI() {
+  LOG("[TIMEZONE] Trying alternative API: " + String(timezoneApiUrl2));
+  
+  HTTPClient http;
+  http.begin(timezoneApiUrl2);
+  http.setTimeout(10000);
+  http.addHeader("User-Agent", "ESP32-HomeDash/1.0");
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Follow redirects
+  
+  int httpCode = http.GET();
+  LOG("[TIMEZONE] Alternative API response code: " + String(httpCode));
+  
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    LOG("[TIMEZONE] Alternative API response: " + payload);
+    
+    // Try to find utc_offset in the response
+    int offsetStart = payload.indexOf("\"utc_offset\":\"");
+    if (offsetStart != -1) {
+      offsetStart += 14; // Skip "utc_offset":""
+      int offsetEnd = payload.indexOf("\"", offsetStart);
+      if (offsetEnd != -1) {
+        String offsetStr = payload.substring(offsetStart, offsetEnd);
+        LOG("[TIMEZONE] Alternative API detected offset: " + offsetStr);
+        
+        // Parse offset format: "+03:00" or "-05:00"
+        if (offsetStr.length() >= 6 && (offsetStr[0] == '+' || offsetStr[0] == '-')) {
+          int sign = (offsetStr[0] == '+') ? 1 : -1;
+          int hours = offsetStr.substring(1, 3).toInt();
+          int minutes = offsetStr.substring(4, 6).toInt();
+          
+          gTimezoneOffset = sign * (hours * 3600 + minutes * 60);
+          gTimezoneDetected = true;
+          
+          LOG("[TIMEZONE] Alternative API set timezone offset: " + String(gTimezoneOffset) + " seconds (" + 
+              String(sign * hours) + "h " + String(minutes) + "m)");
+          
+          // Reconfigure NTP with detected timezone
+          configTime(gTimezoneOffset, 0, ntpServer);
+          LOG("[TIMEZONE] NTP reconfigured with alternative API timezone");
+          http.end();
+          return true;
+        }
+      }
+    }
+    
+    // Try without quotes
+    offsetStart = payload.indexOf("\"utc_offset\":");
+    if (offsetStart != -1) {
+      offsetStart += 13; // Skip "utc_offset":
+      int offsetEnd = payload.indexOf(",", offsetStart);
+      if (offsetEnd == -1) offsetEnd = payload.indexOf("}", offsetStart);
+      if (offsetEnd != -1) {
+        String offsetStr = payload.substring(offsetStart, offsetEnd);
+        offsetStr.trim();
+        offsetStr.replace("\"", ""); // Remove any quotes
+        LOG("[TIMEZONE] Alternative API offset (no quotes): " + offsetStr);
+        
+        if (offsetStr.length() >= 6 && (offsetStr[0] == '+' || offsetStr[0] == '-')) {
+          int sign = (offsetStr[0] == '+') ? 1 : -1;
+          int hours = offsetStr.substring(1, 3).toInt();
+          int minutes = offsetStr.substring(4, 6).toInt();
+          
+          gTimezoneOffset = sign * (hours * 3600 + minutes * 60);
+          gTimezoneDetected = true;
+          
+          LOG("[TIMEZONE] Alternative API set timezone offset: " + String(gTimezoneOffset) + " seconds (" + 
+              String(sign * hours) + "h " + String(minutes) + "m)");
+          
+          configTime(gTimezoneOffset, 0, ntpServer);
+          LOG("[TIMEZONE] NTP reconfigured with alternative API timezone");
+          http.end();
+          return true;
+        }
+      }
+    }
+  }
+  
+  http.end();
+  return false;
+}
+
+/**
+ * @brief Try third fallback timezone API (ip-api.com)
+ * 
+ * This function tries the ip-api.com service as a final fallback.
+ * It looks for the "timezone" field and converts it to UTC offset.
+ */
+static bool tryThirdTimezoneAPI() {
+  LOG("[TIMEZONE] Trying third API: " + String(timezoneApiUrl3));
+  
+  HTTPClient http;
+  http.begin(timezoneApiUrl3);
+  http.setTimeout(10000);
+  http.addHeader("User-Agent", "ESP32-HomeDash/1.0");
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  
+  int httpCode = http.GET();
+  LOG("[TIMEZONE] Third API response code: " + String(httpCode));
+  
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    LOG("[TIMEZONE] Third API response: " + payload);
+    
+    // Try to find timezone field (e.g., "timezone":"Europe/London")
+    int timezoneStart = payload.indexOf("\"timezone\":\"");
+    if (timezoneStart != -1) {
+      timezoneStart += 12; // Skip "timezone":""
+      int timezoneEnd = payload.indexOf("\"", timezoneStart);
+      if (timezoneEnd != -1) {
+        String timezoneStr = payload.substring(timezoneStart, timezoneEnd);
+        LOG("[TIMEZONE] Third API detected timezone: " + timezoneStr);
+        
+        // Convert common timezone names to UTC offsets
+        // This is a simplified mapping - in production you'd want a more comprehensive list
+        if (timezoneStr.indexOf("Europe/London") != -1 || timezoneStr.indexOf("Europe/Dublin") != -1) {
+          gTimezoneOffset = 0; // UTC+0 (or UTC+1 in summer, but we'll use standard time)
+        } else if (timezoneStr.indexOf("Europe/") != -1) {
+          gTimezoneOffset = 1 * 3600; // UTC+1 for most of Europe
+        } else if (timezoneStr.indexOf("America/New_York") != -1 || timezoneStr.indexOf("America/Toronto") != -1) {
+          gTimezoneOffset = -5 * 3600; // UTC-5 (Eastern Time)
+        } else if (timezoneStr.indexOf("America/Chicago") != -1) {
+          gTimezoneOffset = -6 * 3600; // UTC-6 (Central Time)
+        } else if (timezoneStr.indexOf("America/Denver") != -1) {
+          gTimezoneOffset = -7 * 3600; // UTC-7 (Mountain Time)
+        } else if (timezoneStr.indexOf("America/Los_Angeles") != -1) {
+          gTimezoneOffset = -8 * 3600; // UTC-8 (Pacific Time)
+        } else if (timezoneStr.indexOf("Asia/") != -1) {
+          gTimezoneOffset = 8 * 3600; // UTC+8 for most of Asia (simplified)
+        } else {
+          // Default fallback based on timezone string
+          gTimezoneOffset = 0; // UTC as fallback
+        }
+        
+        gTimezoneDetected = true;
+        LOG("[TIMEZONE] Third API set timezone offset: " + String(gTimezoneOffset) + " seconds (" + 
+            String(gTimezoneOffset / 3600) + "h)");
+        
+        configTime(gTimezoneOffset, 0, ntpServer);
+        LOG("[TIMEZONE] NTP reconfigured with third API timezone");
+        http.end();
+        return true;
+      }
+    }
+  }
+  
+  http.end();
+  return false;
 }
 
 // Button state tracking
@@ -294,81 +514,7 @@ int        gTagCount = 0;
 NameEntry  gNames[kMaxNames];
 int        gNamesCount = 0;
 
-// ============================ ADAPTIVE HISTORY STORAGE ============================
-/**
- * @brief Historical data storage configuration
- * 
- * Memory-efficient ring buffer for storing sensor history.
- * Uses binary format with Base64 encoding for web transmission.
- * 
- * Memory usage: 5 sensors × 240 points × 16 bytes = 19,200 bytes total
- * Time coverage: 2 hours at 30-second intervals
- * 
- * IMPROVED: With delta compression, we can store 4x more data efficiently
- * With 5 sensors: 5 sensors × 240 points × 6 bytes = 7,200 bytes (with compression: ~2,880-4,320 bytes)
- */
-constexpr int kHistoryMaxSensors = 5;   // Number of sensors to track in history
-constexpr int kHistoryPoints     = 240; // Points per sensor (ring buffer size)
-
-// === DELTA COMPRESSION STRUCTURES ===
-struct DeltaCompressedPoint {
-  int16_t deltaTemp;      // Temperature difference * 100 (2 bytes)
-  int16_t deltaHumidity;  // Humidity difference * 100 (2 bytes)  
-  int32_t deltaPressure; // Pressure difference in Pa (4 bytes)
-  uint16_t timeDelta;     // Time difference in seconds (2 bytes)
-} __attribute__((packed));
-
-struct DeltaCompressedSensor {
-  char mac[18];           // MAC address (18 bytes)
-  uint16_t pointCount;    // Number of points (2 bytes)
-  uint32_t baseTimestamp; // Base timestamp for delta calculations (4 bytes)
-  float baseTemp;         // Base temperature value (4 bytes)
-  float baseHumidity;     // Base humidity value (4 bytes)
-  float basePressure;     // Base pressure value (4 bytes)
-  // Delta points follow...
-} __attribute__((packed));
-
-// Base64 encoding for compressed history data
-#include "libb64/cencode.h"
-#include "libb64/cdecode.h"
-
-struct HistoryPoint {
-  unsigned long timestamp;
-  float t, h, p;
-  // Removed batt_mV and rssi to save space - only needed for live display
-};
-
-struct SensorHistory {
-  String mac;
-  HistoryPoint points[kHistoryPoints];
-  int count = 0;                      // <= kHistoryPoints
-  int writeIndex = 0;                 // [0..kHistoryPoints-1]
-};
-
-SensorHistory gHistory[kHistoryMaxSensors];
-int gHistoryCount = 0;
-const unsigned long kHistoryIntervalMs = 30000; // Save every 30 seconds for better resolution
-unsigned long gLastHistorySave = 0;
-
-// Binary format for compressed history data
-struct BinaryHistoryHeader {
-  uint32_t magic;        // 0x48495354 ("HIST")
-  uint16_t version;      // Format version
-  uint16_t sensorCount;  // Number of sensors
-  uint32_t serverTime;   // Server timestamp
-} __attribute__((packed));
-
-struct BinarySensorHeader {
-  char mac[18];          // MAC address (null-terminated) - increased to 18 to handle full MAC addresses
-  uint16_t pointCount;   // Number of data points
-} __attribute__((packed));
-
-struct BinaryDataPoint {
-  uint32_t timestamp;    // ESP32 millis() timestamp (milliseconds since boot)
-  uint16_t temp;         // Temperature * 100 (e.g., 2345 = 23.45°C)
-  uint16_t humidity;     // Humidity * 100 (e.g., 6567 = 65.67%)
-  uint32_t pressure;     // Pressure in Pa
-} __attribute__((packed));
+// History functionality removed: no history buffers, compression, or endpoints
 
 // FreeRTOS spinlock to protect gTags[] / gTagCount
 #include "freertos/FreeRTOS.h"
@@ -384,39 +530,61 @@ static float gCpuUsage = 0.0f;
 static float calculateCpuUsage() {
   // Get task handle for current task (loop task)
   TaskHandle_t currentTask = xTaskGetCurrentTaskHandle();
-  
+
   // Get runtime statistics for all tasks
   UBaseType_t taskCount = uxTaskGetNumberOfTasks();
   if (taskCount == 0) return 0.0f;
-  
-  // Allocate memory for task status array
+
   TaskStatus_t* taskStatusArray = (TaskStatus_t*)malloc(taskCount * sizeof(TaskStatus_t));
   if (!taskStatusArray) return 0.0f;
-  
-  // Get task status information
-  UBaseType_t actualTaskCount;
+
   unsigned long totalRuntime = 0;
-  
-  // Get runtime statistics
-  actualTaskCount = uxTaskGetSystemState(taskStatusArray, taskCount, &totalRuntime);
-  
+  UBaseType_t actualTaskCount = uxTaskGetSystemState(taskStatusArray, taskCount, &totalRuntime);
   if (actualTaskCount == 0 || totalRuntime == 0) {
     free(taskStatusArray);
     return 0.0f;
   }
-  
-  // Find the loop task (usually has highest runtime)
-  unsigned long maxRuntime = 0;
+
+  // Find current task runtime counter
+  unsigned long currentTaskRuntime = 0;
   for (UBaseType_t i = 0; i < actualTaskCount; i++) {
-    if (taskStatusArray[i].ulRunTimeCounter > maxRuntime) {
-      maxRuntime = taskStatusArray[i].ulRunTimeCounter;
+    if (taskStatusArray[i].xHandle == currentTask) {
+      currentTaskRuntime = taskStatusArray[i].ulRunTimeCounter;
+      break;
     }
   }
-  
-  // Calculate CPU usage as percentage of total runtime
-  float cpuUsage = (maxRuntime * 100.0f) / totalRuntime;
-  
+
   free(taskStatusArray);
+
+  // Static snapshot across calls to compute deltas
+  static unsigned long prevTotalRuntime = 0;
+  static unsigned long prevTaskRuntime = 0;
+
+  if (prevTotalRuntime == 0 || prevTaskRuntime == 0) {
+    // First call: initialize baseline
+    prevTotalRuntime = totalRuntime;
+    prevTaskRuntime = currentTaskRuntime;
+    return 0.0f;
+  }
+
+  // Compute deltas with wrap protection
+  unsigned long deltaTotal = (totalRuntime >= prevTotalRuntime)
+                               ? (totalRuntime - prevTotalRuntime)
+                               : (UINT32_MAX - prevTotalRuntime + 1UL + totalRuntime);
+  unsigned long deltaTask = (currentTaskRuntime >= prevTaskRuntime)
+                               ? (currentTaskRuntime - prevTaskRuntime)
+                               : (UINT32_MAX - prevTaskRuntime + 1UL + currentTaskRuntime);
+
+  prevTotalRuntime = totalRuntime;
+  prevTaskRuntime = currentTaskRuntime;
+
+  if (deltaTotal == 0) return 0.0f;
+
+  // Percentage of CPU time consumed by this task in the last interval
+  float cpuUsage = (deltaTask * 100.0f) / (float)deltaTotal;
+  // Clamp
+  if (cpuUsage < 0.0f) cpuUsage = 0.0f;
+  if (cpuUsage > 100.0f) cpuUsage = 100.0f;
   return cpuUsage;
 }
 
@@ -771,63 +939,7 @@ static bool decodeRuuviDF5(const std::string& mfg, int rssi, String macStr) {
 }
 
 // ============================ ADAPTIVE HISTORY STORAGE ====================
-static void saveHistoryData() {
-  unsigned long now = millis();
-  if (now - gLastHistorySave < kHistoryIntervalMs) return;
-  gLastHistorySave = now;
-
-  // Safer critical section access with timeout protection
-  portENTER_CRITICAL(&gTagsMux);
-  int localCount = gTagCount;
-  portEXIT_CRITICAL(&gTagsMux);
-
-  for (int i = 0; i < localCount; ++i) {
-    RuuviData tag;
-    portENTER_CRITICAL(&gTagsMux);
-    if (i < gTagCount) tag = gTags[i];
-    portEXIT_CRITICAL(&gTagsMux);
-
-    // Find or create history entry for this MAC
-    int histIdx = -1;
-    for (int j = 0; j < gHistoryCount; ++j) {
-      if (gHistory[j].mac == tag.mac) { histIdx = j; break; }
-    }
-
-    if (histIdx == -1 && gHistoryCount < kHistoryMaxSensors) {
-      histIdx = gHistoryCount++;
-      gHistory[histIdx].mac = tag.mac;
-      gHistory[histIdx].count = 0;
-      gHistory[histIdx].writeIndex = 0;
-      LOG("[History] Added sensor " + String(gHistoryCount) + "/" + String(kHistoryMaxSensors) + ": " + tag.mac);
-    }
-
-    if (histIdx >= 0) {
-      SensorHistory& hist = gHistory[histIdx];
-
-      // Simple circular buffer - just add new data point
-      HistoryPoint& point = hist.points[hist.writeIndex];
-      point.timestamp = now;
-      point.t = tag.t;
-      point.h = tag.h;
-      point.p = tag.p;
-      // Note: battery and RSSI not stored in history to save space
-
-      hist.writeIndex = (hist.writeIndex + 1) % kHistoryPoints;
-      if (hist.count < kHistoryPoints) hist.count++;
-      
-      // Debug: Show history status for this sensor (rotate through all sensors to avoid spam)
-      static unsigned long lastHistoryLog = 0;
-      static int lastLoggedSensor = -1;
-      if (millis() - lastHistoryLog > 30000) { // Log every 30 seconds
-        lastHistoryLog = millis();
-        lastLoggedSensor = (lastLoggedSensor + 1) % gHistoryCount; // Rotate through sensors
-        if (lastLoggedSensor == histIdx) { // Only log for the current sensor in rotation
-          LOG("[History] Saved data for " + tag.mac + " (points: " + String(hist.count) + "/" + String(kHistoryPoints) + ")");
-        }
-      }
-    }
-  }
-}
+// saveHistoryData() removed
 
 // ============================ NimBLE (2.x) ===============================
 class RuuviScanCB : public NimBLEScanCallbacks {
@@ -1580,63 +1692,8 @@ static void handleDataPlain() {
  * @param maxOutputSize Maximum output buffer size
  * @return Actual compressed size, or 0 on error
  */
-static size_t compressDelta(const SensorHistory* input, uint8_t* output, size_t maxOutputSize) {
-  if (!input || !output || maxOutputSize < sizeof(DeltaCompressedSensor)) {
-    LOG("[COMPRESSION] compressDelta failed: input=" + String(input ? "OK" : "NULL") + 
-        ", output=" + String(output ? "OK" : "NULL") + 
-        ", maxSize=" + String(maxOutputSize) + 
-        ", minSize=" + String(sizeof(DeltaCompressedSensor)));
-    return 0;
-  }
-  
-  size_t offset = 0;
-  
-  // Write sensor header
-  DeltaCompressedSensor* header = (DeltaCompressedSensor*)(output + offset);
-  strncpy(header->mac, input->mac.c_str(), sizeof(header->mac) - 1);
-  header->mac[sizeof(header->mac) - 1] = '\0';
-  header->pointCount = input->count;
-  
-  if (input->count == 0) {
-    return sizeof(DeltaCompressedSensor);
-  }
-  
-  // Set base values from first point
-  header->baseTimestamp = input->points[0].timestamp;
-  header->baseTemp = input->points[0].t;
-  header->baseHumidity = input->points[0].h;
-  header->basePressure = input->points[0].p;
-  
-  LOG("[COMPRESSION] Base values - Temp: " + String(header->baseTemp) + 
-      ", Humidity: " + String(header->baseHumidity) + 
-      ", Pressure: " + String(header->basePressure) + " Pa");
-  
-  offset += sizeof(DeltaCompressedSensor);
-  
-  // Calculate deltas for remaining points
-  for (int i = 1; i < input->count; i++) {
-    if (offset + sizeof(DeltaCompressedPoint) > maxOutputSize) {
-      break; // Buffer full
-    }
-    
-    DeltaCompressedPoint* delta = (DeltaCompressedPoint*)(output + offset);
-    
-    // Calculate deltas
-    delta->deltaTemp = (int16_t)((input->points[i].t - input->points[i-1].t) * 100);
-    delta->deltaHumidity = (int16_t)((input->points[i].h - input->points[i-1].h) * 100);
-    delta->deltaPressure = (int32_t)(input->points[i].p - input->points[i-1].p);
-    delta->timeDelta = (uint16_t)((input->points[i].timestamp - input->points[i-1].timestamp) / 1000);
-    
-    // Debug pressure deltas for first few points
-    if (i <= 3) {
-      LOG("[COMPRESSION] Point " + String(i) + " - Pressure: " + String(input->points[i].p) + 
-          " Pa, Delta: " + String(delta->deltaPressure) + " Pa");
-    }
-    
-    offset += sizeof(DeltaCompressedPoint);
-  }
-  
-  return offset;
+static size_t compressDelta(const SensorHistory* /*input*/, uint8_t* /*output*/, size_t /*maxOutputSize*/) {
+  return 0;
 }
 
 /**
@@ -1645,192 +1702,23 @@ static size_t compressDelta(const SensorHistory* input, uint8_t* output, size_t 
  * @param compressedSize Compressed data size
  * @return Compression ratio (0.0 = no compression, 1.0 = 100% compression)
  */
-static float calculateCompressionRatio(size_t originalSize, size_t compressedSize) {
-  if (originalSize == 0) return 0.0f;
-  return 1.0f - ((float)compressedSize / (float)originalSize);
+static float calculateCompressionRatio(size_t /*originalSize*/, size_t /*compressedSize*/) {
+  return 0.0f;
 }
 
 // Base64 encoding helper function - SAFER VERSION
-static String encodeBase64(const uint8_t* data, size_t length) {
-  base64_encodestate state;
-  base64_init_encodestate(&state);
-  
-  String result;
-  result.reserve((length * 4) / 3 + 8); // Extra buffer for safety
-  
-  // Use smaller buffer to prevent stack overflow
-  char buffer[128];
-  size_t remaining = length;
-  const char* input = (const char*)data;
-  
-  // Encode in chunks to prevent buffer overflow
-  while (remaining > 0) {
-    size_t chunkSize = (remaining > 64) ? 64 : remaining; // Process max 64 bytes at a time
-    
-    int encoded = base64_encode_block(input, chunkSize, buffer, &state);
-    if (encoded > 0 && encoded < sizeof(buffer)) {
-      result += String(buffer, encoded);
-    }
-    
-    input += chunkSize;
-    remaining -= chunkSize;
-  }
-  
-  // Finalize encoding
-  int encoded = base64_encode_blockend(buffer, &state);
-  if (encoded > 0 && encoded < sizeof(buffer)) {
-    result += String(buffer, encoded);
-  }
-  
-  return result;
+static String encodeBase64(const uint8_t* /*data*/, size_t /*length*/) {
+  return String();
 }
 
 static void handleHistory() {
   gHttpRequestsTotal++; gLastHttpActivityMs = millis();
-  LOG("[HTTP] GET /history - Free heap: " + String(ESP.getFreeHeap()));
-
-  // Check if we have any history data
-  if (gHistoryCount == 0) {
-    http.send(200, "application/json", "{\"data\":{},\"serverTime\":" + String(millis()) + "}");
-    return;
-  }
-
-  // Calculate total size needed for delta compression
-  size_t totalSize = sizeof(BinaryHistoryHeader);
-  LOG("[COMPRESSION] Header size: " + String(sizeof(BinaryHistoryHeader)) + " bytes");
-  
-  for (int i = 0; i < gHistoryCount; i++) {
-    size_t sensorSize = sizeof(DeltaCompressedSensor);
-    if (gHistory[i].count > 1) {
-      sensorSize += (gHistory[i].count - 1) * sizeof(DeltaCompressedPoint);
-    }
-    totalSize += sensorSize;
-    LOG("[COMPRESSION] Sensor " + String(i) + ": " + String(gHistory[i].count) + " points, " + String(sensorSize) + " bytes");
-  }
-  
-  // Use the actual calculated size (delta compression is already efficient)
-  size_t compressedSize = totalSize;
-  
-  LOG("[COMPRESSION] Calculated size: " + String(totalSize) + " bytes for " + String(gHistoryCount) + " sensors");
-  
-  // Safety check with higher limit for improved system
-  if (compressedSize > 32768) { // 32KB limit
-    http.send(500, "application/json", "{\"error\":\"Data too large for compression\"}");
-    return;
-  }
-
-  // Allocate buffer for compressed data
-  uint8_t* compressedData = (uint8_t*)malloc(compressedSize);
-  if (!compressedData) {
-    http.send(500, "application/json", "{\"error\":\"Memory allocation failed\"}");
-    return;
-  }
-
-  size_t offset = 0;
-  
-  // Determine if we can use delta compression for all sensors
-  bool useDeltaCompression = true;
-  for (int i = 0; i < gHistoryCount; i++) {
-    if (gHistory[i].count < 2) {
-      useDeltaCompression = false; // Need at least 2 points for delta compression
-      break;
-    }
-  }
-
-  // Write header with correct version
-  BinaryHistoryHeader* header = (BinaryHistoryHeader*)(compressedData + offset);
-  header->magic = 0x48495354; // "HIST"
-  header->version = useDeltaCompression ? 2 : 1; // FIXED: Use correct version based on compression capability
-  header->sensorCount = gHistoryCount;
-  header->serverTime = millis();
-  offset += sizeof(BinaryHistoryHeader);
-
-  LOG("[COMPRESSION] Using version " + String(header->version) + " compression");
-
-  // Compress each sensor's data
-  for (int i = 0; i < gHistoryCount; i++) {
-    if (useDeltaCompression && offset + sizeof(DeltaCompressedSensor) <= compressedSize) {
-      // Try delta compression first
-      size_t remainingSize = compressedSize - offset;
-      LOG("[COMPRESSION] Compressing sensor " + String(i) + ", remaining size: " + String(remainingSize));
-      size_t compressedSensorSize = compressDelta(&gHistory[i], compressedData + offset, remainingSize);
-      LOG("[COMPRESSION] Sensor " + String(i) + " compressed size: " + String(compressedSensorSize));
-      
-      if (compressedSensorSize > 0) {
-        offset += compressedSensorSize;
-        continue; // Success, move to next sensor
-      }
-    }
-    
-    // Fallback to simple binary format if delta compression fails or disabled
-    LOG("[COMPRESSION] Using fallback format for sensor " + String(i));
-    
-    // Check bounds before writing fallback data
-    if (offset + sizeof(BinarySensorHeader) > compressedSize) {
-      LOG("[COMPRESSION] Fallback would exceed buffer for sensor " + String(i));
-      break;
-    }
-    
-    // Write sensor header
-    BinarySensorHeader* sensorHeader = (BinarySensorHeader*)(compressedData + offset);
-    strncpy(sensorHeader->mac, gHistory[i].mac.c_str(), sizeof(sensorHeader->mac) - 1);
-    sensorHeader->mac[sizeof(sensorHeader->mac) - 1] = '\0';
-    sensorHeader->pointCount = gHistory[i].count;
-    offset += sizeof(BinarySensorHeader);
-    
-    // Write data points in original format
-    for (int j = 0; j < gHistory[i].count && offset + sizeof(BinaryDataPoint) <= compressedSize; j++) {
-      BinaryDataPoint* point = (BinaryDataPoint*)(compressedData + offset);
-      point->timestamp = gHistory[i].points[j].timestamp;
-      point->temp = isnan(gHistory[i].points[j].t) ? 0xFFFF : (uint16_t)(gHistory[i].points[j].t * 100);
-      point->humidity = isnan(gHistory[i].points[j].h) ? 0xFFFF : (uint16_t)(gHistory[i].points[j].h * 100);
-      point->pressure = isnan(gHistory[i].points[j].p) ? 0xFFFFFFFF : (uint32_t)gHistory[i].points[j].p;
-      offset += sizeof(BinaryDataPoint);
-    }
-  }
-
-  // Log compression statistics
-  size_t originalSize = 0;
-  for (int i = 0; i < gHistoryCount; i++) {
-    originalSize += sizeof(BinarySensorHeader) + (gHistory[i].count * sizeof(BinaryDataPoint));
-  }
-  float compressionRatio = calculateCompressionRatio(originalSize, offset);
-  LOG("[COMPRESSION] Original: " + String(originalSize) + " bytes, Compressed: " + String(offset) + " bytes, Ratio: " + String(compressionRatio * 100, 1) + "%");
-
-  // Encode to Base64
-  String base64Data = encodeBase64(compressedData, offset);
-  free(compressedData);
-
-  // Send response with correct version
-  String response = "{\"compressed\":true,\"version\":" + String(header->version) + ",\"data\":\"" + base64Data + "\"}";
-  
-  http.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  http.sendHeader("Connection", "close");
-  http.send(200, "application/json", response);
+  http.send(404, "text/plain", "History disabled");
 }
 
-// Clear history buffer
 static void handleClearHistory() {
   gHttpRequestsTotal++; gLastHttpActivityMs = millis();
-  LOG("[HTTP] GET /clear-history - Free heap: " + String(ESP.getFreeHeap()));
-  
-  // Clear the history buffer
-  for (int i = 0; i < kHistoryMaxSensors; ++i) {
-    gHistory[i].mac = "";
-    gHistory[i].count = 0;
-    gHistory[i].writeIndex = 0;
-    // Clear the points array
-    for (int j = 0; j < kHistoryPoints; ++j) {
-      gHistory[i].points[j].timestamp = 0;
-      gHistory[i].points[j].t = NAN;
-      gHistory[i].points[j].h = NAN;
-      gHistory[i].points[j].p = NAN;
-    }
-  }
-  gHistoryCount = 0;
-  
-  LOG("[History] History buffer cleared");
-  http.send(200, "application/json", "{\"status\":\"cleared\",\"message\":\"History buffer cleared successfully\"}");
+  http.send(404, "text/plain", "History disabled");
 }
 
 // --- misc
@@ -1947,6 +1835,38 @@ static void handleConfigPost() {
   }
 }
 
+// --- Names endpoints
+static void handleNamesGet() {
+  gHttpRequestsTotal++; gLastHttpActivityMs = millis();
+  http.sendHeader("Cache-Control","no-cache, no-store, must-revalidate");
+  if (!LittleFS.exists("/names.csv")) {
+    http.send(200, "text/plain", "MAC,Name\n");
+    return;
+  }
+  fs::File f = LittleFS.open("/names.csv", "r");
+  if (!f) { http.send(500, "text/plain", "Failed to open names.csv"); return; }
+  String content; content.reserve(1024);
+  while (f.available()) content += f.readStringUntil('\n') + "\n";
+  f.close();
+  http.send(200, "text/plain", content);
+}
+
+static void handleNamesPost() {
+  gHttpRequestsTotal++; gLastHttpActivityMs = millis();
+  // Expect raw body text as names.csv content
+  if (!http.hasArg("plain")) { http.send(400, "text/plain", "Missing body"); return; }
+  String body = http.arg("plain");
+  // Basic size guard
+  if (body.length() > 8192) { http.send(413, "text/plain", "Payload too large"); return; }
+  fs::File f = LittleFS.open("/names.csv", "w");
+  if (!f) { http.send(500, "text/plain", "Failed to write names.csv"); return; }
+  f.print(body);
+  f.close();
+  // Reload names into memory
+  loadNamesCsv();
+  http.send(200, "text/plain", "Saved");
+}
+
 // --- List files
 static void handleList() {
   String out = "[";
@@ -2044,13 +1964,13 @@ void setup() {
   http.on("/styles.css",   HTTP_GET,  handleStatic);
   http.on("/data",         HTTP_GET,  handleDataStream);
   http.on("/data_plain",   HTTP_GET,  handleDataPlain);
-  http.on("/history",      HTTP_GET,  handleHistory);
-  http.on("/clear-history", HTTP_GET, handleClearHistory);
   http.on("/health",       HTTP_GET,  handleHealth);
   http.on("/upload",       HTTP_GET,  handleUploadForm);
   http.on("/upload",       HTTP_POST, handleUploadPost, handleFileUpload);
   http.on("/list",         HTTP_GET,  handleList);
   http.on("/reload-names", HTTP_GET,  handleReloadNames);
+  http.on("/names",        HTTP_GET,  handleNamesGet);
+  http.on("/names",        HTTP_POST, handleNamesPost);
   http.on("/ping",         HTTP_GET,  handlePing);
   http.on("/config",       HTTP_GET,  handleConfigGet);
   http.on("/config",       HTTP_POST, handleConfigPost);
@@ -2108,8 +2028,7 @@ void loop() {
 
   http.handleClient();
 
-  // Save history data periodically
-  saveHistoryData();
+  // History functionality removed
   
   // Detect timezone periodically if not detected yet
   if (WiFi.status() == WL_CONNECTED && !gTimezoneDetected) {
