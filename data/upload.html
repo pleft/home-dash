@@ -1,37 +1,55 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>File Upload</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <title>Home Dashboard • Upload</title>
+  <script>
+    (function(){
+      try{var t=localStorage.getItem('dashboard-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){}
+    })();
+  </script>
+  <link rel="stylesheet" href="/styles.css">
   <style>
-    body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
-    form { border: 2px dashed #ccc; padding: 20px; text-align: center; border-radius: 8px; }
-    input[type="file"] { margin: 10px 0; }
-    button { background-color: #28a745; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
-    button:hover { background-color: #218838; }
-    .links { margin-top: 20px; }
-    .links a { color: #007bff; text-decoration: none; margin-right: 15px; }
-    .links a:hover { text-decoration: underline; }
-    .tip { background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin-top: 15px; }
+    .page-container { max-width: 1000px; margin: 0 auto; padding: 8px 12px; }
+    .btn { background: #6366f1; color: white; padding: 10px 16px; border: none; border-radius: 10px; cursor: pointer; }
+    .btn:hover { filter: brightness(1.08); }
+    .drop { border:2px dashed rgba(255,255,255,0.2); padding:16px; border-radius:10px; text-align:center; }
+    .muted { color: #94a3b8; }
   </style>
 </head>
 <body>
-  <h2>Upload File to LittleFS</h2>
-  
-  <form method="POST" action="/upload" enctype="multipart/form-data">
-    <input type="file" name="file" required>
-    <br><br>
-    <button type="submit">Upload File</button>
-  </form>
-  
-  <div class="tip">
-    <strong>💡 Tip:</strong> Upload <code>wifi.properties</code> and/or <code>names.csv</code> files.
+  <div class="page-container">
+    <h1 class="logo" aria-label="Upload">
+      <span class="emoji-icon" aria-hidden="true">⬆️</span>
+      <span class="title-text">Upload</span>
+    </h1>
+
+  <div class="top-cards-grid" style="grid-template-columns: 1fr;">
+    <div class="esp32-container">
+      <div class="esp32-card">
+        <div class="esp32-header">
+          <h2>Upload to LittleFS</h2>
+        </div>
+        <div class="esp32-content">
+          <form method="POST" action="/upload" enctype="multipart/form-data" class="drop">
+            <input type="file" name="file" required>
+            <div style="margin-top:12px;">
+              <button type="submit" class="btn">Upload File</button>
+            </div>
+          </form>
+          <div style="margin-top:12px;" class="muted">
+            Tip: Upload <code>wifi.properties</code> and <code>names.csv</code>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
-  
-  <div class="links">
+
+  <div class="links" style="margin-top:16px;">
     <a href="/">← Back to Dashboard</a>
-    <a href="/config">Wi-Fi Config</a>
+    <a href="/config">Settings</a>
+  </div>
   </div>
 </body>
 </html>

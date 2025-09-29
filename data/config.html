@@ -1,22 +1,61 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Wi-Fi Configuration</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <title>Home Dashboard • Settings</title>
+  <script>
+    (function(){
+      try{var t=localStorage.getItem('dashboard-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){}
+    })();
+  </script>
+  <link rel="stylesheet" href="/styles.css">
   <style>
-    body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
-    label { display: block; margin-bottom: 5px; font-weight: bold; }
-    input[type="text"], input[type="password"] { width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; }
-    button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
-    button:hover { background-color: #0056b3; }
-    .links { margin-top: 20px; }
-    .links a { color: #007bff; text-decoration: none; margin-right: 15px; }
-    .links a:hover { text-decoration: underline; }
+    .page-container { max-width: 1000px; margin: 0 auto; padding: 8px 12px; }
+    .input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.2); color: #e5e7eb; }
+    .input::placeholder { color: #9ca3af; }
+    .btn { background: #6366f1; color: white; padding: 10px 16px; border: none; border-radius: 10px; cursor: pointer; }
+    .btn:hover { filter: brightness(1.08); }
+    textarea.input { min-height: 220px; font-family: monospace; white-space: pre; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
+    .muted { color: #94a3b8; }
   </style>
 </head>
 <body>
-  <h2>Wi-Fi Settings</h2>
+  <div class="page-container">
+    <h1 class="logo" aria-label="Settings">
+      <span class="emoji-icon" aria-hidden="true">⚙️</span>
+      <span class="title-text">Settings</span>
+    </h1>
+
+  <div class="top-cards-grid" style="grid-template-columns: 1fr;">
+    <div class="esp32-container">
+      <div class="esp32-card">
+        <div class="esp32-header">
+          <h2>Wi‑Fi</h2>
+        </div>
+        <div class="esp32-content">
+          <form method="POST" action="/config">
+            <div class="row">
+              <div>
+                <label for="ssid" class="esp32-label">SSID</label>
+                <input type="text" name="ssid" id="ssid" placeholder="Your Wi‑Fi network" class="input" required>
+              </div>
+              <div>
+                <label for="password" class="esp32-label">Password</label>
+                <input type="password" name="password" id="password" placeholder="Your Wi‑Fi password" class="input" required>
+              </div>
+            </div>
+            <div style="margin-top:12px; display:flex; gap:12px;">
+              <button type="submit" class="btn">Save & Connect</button>
+              <a class="btn" href="/upload" style="text-decoration:none; display:inline-block;">Upload File</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
   <form method="POST" action="/config">
     <label for="ssid">SSID:</label>
     <input type="text" name="ssid" id="ssid" placeholder="Enter your Wi-Fi network name" required>
@@ -27,10 +66,51 @@
     <button type="submit">Save & Connect</button>
   </form>
   
-  <p>You can also <a href="/upload">upload</a> a <code>wifi.properties</code> file.</p>
+  <p class="muted" style="margin-top:10px;">You can also upload a <code>wifi.properties</code> file.</p>
+
+  <div class="top-cards-grid" style="grid-template-columns: 1fr; margin-top:16px;">
+    <div class="esp32-container">
+      <div class="esp32-card">
+        <div class="esp32-header">
+          <h2>Sensor Names</h2>
+        </div>
+        <div class="esp32-content">
+          <p class="esp32-label">Edit <code>names.csv</code> (MAC,Name). Save applies immediately.</p>
+          <textarea id="namesText" class="input"></textarea>
+          <div style="margin-top:10px; display:flex; gap:10px; align-items:center;">
+            <button id="loadNames" type="button" class="btn">Reload</button>
+            <button id="saveNames" type="button" class="btn">Save</button>
+            <span id="namesStatus" class="muted" style="margin-left:6px;"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    async function fetchNames() {
+      try {
+        const r = await fetch('/names', { cache: 'no-store' });
+        const t = await r.text();
+        document.getElementById('namesText').value = t;
+        document.getElementById('namesStatus').textContent = 'Loaded';
+      } catch { document.getElementById('namesStatus').textContent = 'Load failed'; }
+    }
+    async function saveNames() {
+      const body = document.getElementById('namesText').value || '';
+      try {
+        const r = await fetch('/names', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body });
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        document.getElementById('namesStatus').textContent = 'Saved';
+      } catch { document.getElementById('namesStatus').textContent = 'Save failed'; }
+    }
+    document.getElementById('loadNames').addEventListener('click', fetchNames);
+    document.getElementById('saveNames').addEventListener('click', saveNames);
+    fetchNames();
+  </script>
   
-  <div class="links">
+  <div class="links" style="margin-top:16px;">
     <a href="/">← Back to Dashboard</a>
+  </div>
   </div>
 </body>
 </html>

@@ -118,6 +118,30 @@ h1 {
   text-shadow: 0 0 30px rgba(99, 102, 241, 0.3);
 }
 
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+}
+
+.logo-svg { display: inline-block; vertical-align: -4px; }
+.title-text { line-height: 1; display: inline-block; }
+
+/* Ensure emojis are visible even with gradient text on h1 */
+.emoji-icon {
+  display: inline-block;
+  font-size: 1.6rem;
+  line-height: 1;
+  vertical-align: -0.2rem;
+  color: var(--accent-primary);
+  background: none !important;
+  -webkit-background-clip: border-box !important;
+  background-clip: border-box !important;
+  -webkit-text-fill-color: currentColor !important;
+  text-shadow: none;
+}
+
 h2 {
   color: var(--text-primary);
   margin: 1.5rem 0 1rem;
