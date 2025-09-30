@@ -96,7 +96,7 @@ constexpr int      kMaxVisibleCards        = 2;          // Maximum cards visibl
 // === TIMING CONFIGURATION ===
 constexpr uint32_t kDrawIntervalMs         = 500;        // Display refresh interval (ms)
 constexpr uint32_t kButtonPollIntervalMs  = 10;         // Button polling interval (ms)
-constexpr uint32_t kUpdateThrottleMs       = 1000;       // Minimum time between sensor updates (ms)
+constexpr uint32_t kUpdateThrottleMs       = 200;        // Minimum time between sensor updates (ms)
 constexpr uint32_t kStaConnectTimeoutMs    = 12000;      // WiFi connection timeout (ms)
 
 // === NETWORK CONFIGURATION ===
@@ -1565,6 +1565,28 @@ static String fmtFloatOrNullString(float v, uint8_t prec) {
   return String(v, (unsigned int)prec);
 }
 
+// Efficient friendly name lookup without allocating temporary Strings
+static void getFriendlyNameCStr(const String& mac, char* out, size_t outSize) {
+  if (!out || outSize == 0) return;
+  out[0] = '\0';
+  if (mac.length() == 0) {
+    strncpy(out, "Unknown", outSize - 1);
+    out[outSize - 1] = '\0';
+    return;
+  }
+  for (int i = 0; i < gNamesCount; ++i) {
+    // Case-insensitive compare to avoid allocating uppercase copies
+    if (gNames[i].mac.equalsIgnoreCase(mac)) {
+      strncpy(out, gNames[i].name.c_str(), outSize - 1);
+      out[outSize - 1] = '\0';
+      return;
+    }
+  }
+  // Fallback to MAC string
+  strncpy(out, mac.c_str(), outSize - 1);
+  out[outSize - 1] = '\0';
+}
+
 static void handleDataStream() {
   if (gDataInFlight) { 
     LOG("[HTTP] GET /data - BUSY (request blocked)");
@@ -1643,45 +1665,7 @@ static void handleDataStream() {
   LOG("[HTTP] GET /data - END - Bytes sent: " + String(gHttpDataBytes) + ", Free heap: " + String(ESP.getFreeHeap()));
 }
 
-// --- /data_plain (non-chunked)
-static void handleDataPlain() {
-  gHttpRequestsTotal++; gHttpDataRequests++; gLastHttpActivityMs = millis();
-
-  String out;
-  out.reserve(512 + gTagCount * 160);
-  out += F("{\"tags\":[");
-  unsigned long now = millis();
-
-  int localCount;
-  portENTER_CRITICAL(&gTagsMux);
-  localCount = gTagCount;
-  portEXIT_CRITICAL(&gTagsMux);
-
-  for (int i = 0; i < localCount; ++i) {
-    RuuviData t;
-    portENTER_CRITICAL(&gTagsMux);
-    if (i < gTagCount) t = gTags[i];
-    portEXIT_CRITICAL(&gTagsMux);
-
-    if (i) out += ',';
-    out += F("{\"mac\":\""); out += t.mac; out += '"';
-    out += F(",\"name\":\""); out += friendlyName(t.mac); out += '"';
-
-    out += F(",\"t\":"); out += (isnan(t.t) ? F("null") : String(t.t, 2));
-    out += F(",\"h\":"); out += (isnan(t.h) ? F("null") : String(t.h, 2));
-    out += F(",\"p\":"); out += (isnan(t.p) ? F("null") : String((uint32_t)t.p));
-    out += F(",\"batt\":"); out += String((unsigned)t.batt_mV);
-    out += F(",\"rssi\":"); out += String(t.rssi);
-
-    out += F(",\"age\":");  out += String((now - t.lastSeen) / 1000);
-    out += '}';
-  }
-  out += F("]}");
-
-  http.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  http.sendHeader("Connection", "close");
-  http.send(200, "application/json", out);
-}
+// (removed) /data_plain endpoint
 
 // === DELTA COMPRESSION FUNCTIONS ===
 
@@ -1963,7 +1947,7 @@ void setup() {
   http.on("/app.js",       HTTP_GET,  handleStatic);
   http.on("/styles.css",   HTTP_GET,  handleStatic);
   http.on("/data",         HTTP_GET,  handleDataStream);
-  http.on("/data_plain",   HTTP_GET,  handleDataPlain);
+  // (removed) http.on("/data_plain",   HTTP_GET,  handleDataPlain);
   http.on("/health",       HTTP_GET,  handleHealth);
   http.on("/upload",       HTTP_GET,  handleUploadForm);
   http.on("/upload",       HTTP_POST, handleUploadPost, handleFileUpload);
@@ -1981,13 +1965,13 @@ void setup() {
   // NimBLE scan
   NimBLEDevice::init("");
   NimBLEScan* scan = NimBLEDevice::getScan();
-  scan->setScanCallbacks(new RuuviScanCB(), /*wantDuplicates=*/true);
+  scan->setScanCallbacks(new RuuviScanCB(), /*wantDuplicates=*/false);
   scan->setActiveScan(true);
-  scan->setInterval(300);  // More conservative to reduce memory pressure (was 200ms)
-  scan->setWindow(100);    // More conservative to reduce memory pressure (was 80ms)
-  scan->setDuplicateFilter(false);
+  scan->setInterval(300);  // Balanced scan rate for detection vs memory
+  scan->setWindow(100);    // Wider window for better detection
+  scan->setDuplicateFilter(false); // Allow duplicates but no callback duplicates
   scan->start(0, /*isContinue=*/false, /*restart=*/false);
-  LOG("[BLE] scan started");
+  LOG("[BLE] scan started (balanced detection)");
 }
 
 void loop() {

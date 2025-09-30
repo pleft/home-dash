@@ -52,22 +52,11 @@
               <a class="btn" href="/upload" style="text-decoration:none; display:inline-block;">Upload File</a>
             </div>
           </form>
+          <div style="margin-top:12px;" class="muted">You can also upload a <code>wifi.properties</code> file.</div>
         </div>
       </div>
     </div>
   </div>
-  <form method="POST" action="/config">
-    <label for="ssid">SSID:</label>
-    <input type="text" name="ssid" id="ssid" placeholder="Enter your Wi-Fi network name" required>
-    
-    <label for="password">Password:</label>
-    <input type="password" name="password" id="password" placeholder="Enter your Wi-Fi password" required>
-    
-    <button type="submit">Save & Connect</button>
-  </form>
-  
-  <p class="muted" style="margin-top:10px;">You can also upload a <code>wifi.properties</code> file.</p>
-
   <div class="top-cards-grid" style="grid-template-columns: 1fr; margin-top:16px;">
     <div class="esp32-container">
       <div class="esp32-card">
