@@ -62,55 +62,6 @@ async function updateESP32Info() {
 }
 setInterval(updateESP32Info, 20000);
 updateESP32Info();
-// Initialize visual background immediately
-initializeESP32Background();
-
-function updateESP32Background(data) {
-  const el = document.getElementById('esp32Background');
-  if (!el) return;
-  el.innerHTML = createCircuitBackground(data || { heap: 0, uptime_ms: 0, ap_mode: false });
-}
-
-// Provide an initial background before first /health response
-function initializeESP32Background() {
-  const backgroundEl = document.getElementById('esp32Background');
-  if (!backgroundEl) return;
-  const initialData = { heap: 25000, uptime_ms: 1000, ap_mode: false };
-  backgroundEl.innerHTML = createCircuitBackground(initialData);
-}
-
-function createCircuitBackground(data) {
-  const heapOK = (data.heap || 0) > 20000;
-  const wifiOK = !data.ap_mode;
-  return `
-    <svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="circuitBg" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" style="stop-color:#0ea5e9;stop-opacity:0.1" />
-          <stop offset="100%" style="stop-color:#0284c7;stop-opacity:0.2" />
-        </linearGradient>
-        <filter id="glow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-      </defs>
-      <rect width="400" height="200" fill="url(#circuitBg)"/>
-      <rect x="150" y="80" width="100" height="60" rx="8" fill="rgba(255,255,255,0.2)" stroke="rgba(255,255,255,0.4)" stroke-width="2"/>
-      <text x="200" y="105" text-anchor="middle" fill="rgba(255,255,255,0.85)" font-size="12" font-family="monospace">ESP32</text>
-      <g stroke="rgba(255,255,255,0.6)" stroke-width="2" fill="none">
-        <line x1="50" y1="50" x2="150" y2="50"/>
-        <line x1="250" y1="50" x2="350" y2="50"/>
-        <line x1="50" y1="150" x2="150" y2="150"/>
-        <line x1="250" y1="150" x2="350" y2="150"/>
-        <line x1="50" y1="100" x2="150" y2="100"/>
-        <line x1="250" y1="100" x2="350" y2="100"/>
-        <line x1="200" y1="50" x2="200" y2="80"/>
-        <line x1="200" y1="140" x2="200" y2="150"/>
-      </g>
-      <circle cx="100" cy="50" r="3" fill="${heapOK ? '#10b981' : '#ef4444'}" filter="url(#glow)"/>
-      <circle cx="300" cy="50" r="3" fill="${wifiOK ? '#10b981' : '#f59e0b'}" filter="url(#glow)"/>
-      <circle cx="100" cy="150" r="3" fill="#6366f1" filter="url(#glow)"/>
-      <circle cx="300" cy="150" r="3" fill="#8b5cf6" filter="url(#glow)"/>
-    </svg>
-  `;
-}
 
 // ================= THEME =================
 function initializeThemeToggle() {
@@ -134,11 +85,13 @@ function updateThemeIcon(icon, theme) { icon.textContent = theme === 'dark' ? 'ð
 initializeThemeToggle();
 
 // ================= LIVE SENSOR CARDS =================
+// Removed sensor background helpers (tempToColor, humidityToDropletCount, pressureToIsoGap, sensorBackgroundSVG)
+
 function createSensorCard(tag) {
   const displayName = tag.name && tag.name.length ? tag.name : tag.mac;
   const isOnline = tag.age < 30;
   return `
-    <div class="sensor-card" id="card-${tag.mac.replace(/:/g, '')}">
+    <div class="sensor-card ${isOnline ? '' : 'offline'}" id="card-${tag.mac.replace(/:/g, '')}">
       <div class="sensor-card-header">
         <div class="sensor-name">${displayName}</div>
         <div class="sensor-status ${isOnline ? '' : 'offline'}"></div>
@@ -154,6 +107,7 @@ function createSensorCard(tag) {
     </div>
   `;
 }
+
 function updateSensorCard(tag) {
   const cardId = `card-${tag.mac.replace(/:/g, '')}`;
   let card = document.getElementById(cardId);
@@ -212,6 +166,32 @@ document.addEventListener('visibilitychange', () => {
 tick();
 restartTimer();
 
+// ================ MOTD ==================
+async function loadMotd() {
+  try { const r = await fetch('/motd', { cache: 'no-store' }); if (!r.ok) return; const t = await r.text(); const el = document.getElementById('motd'); if (el) el.textContent = t.trim(); } catch {}
+}
+loadMotd();
+
+// ================ MINI CALENDAR ==================
+function renderMiniCalendar(date = new Date()) {
+  const el = document.getElementById('miniCalendar'); if (!el) return;
+  const y = date.getFullYear(); const m = date.getMonth(); const d = date.getDate();
+  const first = new Date(y, m, 1); const startWd = first.getDay(); // 0=Sun
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const wds = ['S','M','T','W','T','F','S'];
+  let html = '';
+  // header weekdays
+  for (let i=0;i<7;i++) html += `<div class="day wd">${wds[i]}</div>`;
+  // blanks
+  for (let i=0;i<startWd;i++) html += `<div class="day" style="visibility:hidden">0</div>`;
+  for (let i=1;i<=daysInMonth;i++) {
+    const cls = (i===d) ? 'day today' : 'day';
+    html += `<div class="${cls}">${i}</div>`;
+  }
+  el.innerHTML = html;
+}
+renderMiniCalendar();
+
 // ================= CLOCK BACKGROUNDS & GREETING =================
 function updateGreetingAndBackground(now) {
   const hour = now.getHours();
@@ -243,7 +223,7 @@ function updateGreetingAndBackground(now) {
 
 function createSunriseBackground() {
   return `
-    <svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 400 200" preserveAspectRatio="xMidYMid slice" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <linearGradient id="sunriseSky" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" style="stop-color:#ff6b6b;stop-opacity:1" />
@@ -274,7 +254,7 @@ function createSunriseBackground() {
 
 function createSunBackground() {
   return `
-    <svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 400 200" preserveAspectRatio="xMidYMid slice" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <linearGradient id="daySky" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" style="stop-color:#87ceeb;stop-opacity:1" />
@@ -295,7 +275,7 @@ function createSunBackground() {
 
 function createSunsetBackground() {
   return `
-    <svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 400 200" preserveAspectRatio="xMidYMid slice" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <linearGradient id="sunsetSky" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" style="stop-color:#ff8a65;stop-opacity:1" />
@@ -316,7 +296,7 @@ function createSunsetBackground() {
 
 function createMoonBackground() {
   return `
-    <svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 400 200" preserveAspectRatio="xMidYMid slice" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <linearGradient id="nightSky" x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" style="stop-color:#1a237e;stop-opacity:1" />
@@ -343,3 +323,5 @@ function createMoonBackground() {
     </svg>
   `;
 }
+
+// Remove periodic sizing fixer since SVGs now include proper attributes

@@ -1893,6 +1893,29 @@ static void handleList() {
   http.send(200, "application/json", out);
 }
 
+// --- MOTD endpoints
+static void handleMotdGet() {
+  gHttpRequestsTotal++; gLastHttpActivityMs = millis();
+  if (!LittleFS.exists("/motd.txt")) { http.send(200, "text/plain", ""); return; }
+  fs::File f = LittleFS.open("/motd.txt", "r");
+  if (!f) { http.send(500, "text/plain", "Failed to open motd.txt"); return; }
+  String content; content.reserve(256);
+  while (f.available()) content += f.readStringUntil('\n') + "\n";
+  f.close();
+  http.send(200, "text/plain", content);
+}
+static void handleMotdPost() {
+  gHttpRequestsTotal++; gLastHttpActivityMs = millis();
+  if (!http.hasArg("plain")) { http.send(400, "text/plain", "Missing body"); return; }
+  String body = http.arg("plain");
+  if (body.length() > 1024) { http.send(413, "text/plain", "Payload too large"); return; }
+  fs::File f = LittleFS.open("/motd.txt", "w");
+  if (!f) { http.send(500, "text/plain", "Failed to write motd.txt"); return; }
+  f.print(body);
+  f.close();
+  http.send(200, "text/plain", "Saved");
+}
+
 // =============================== setup/loop ==============================
 void setup() {
   Serial.begin(115200);
@@ -1977,6 +2000,8 @@ void setup() {
   http.on("/ping",         HTTP_GET,  handlePing);
   http.on("/config",       HTTP_GET,  handleConfigGet);
   http.on("/config",       HTTP_POST, handleConfigPost);
+  http.on("/motd",         HTTP_GET,  handleMotdGet);
+  http.on("/motd",         HTTP_POST, handleMotdPost);
   http.onNotFound(handleStatic);
   http.begin();
   LOG("[HTTP] server started on :80");

@@ -51,9 +51,9 @@
     </button>
   </div>
 
-  <!-- Top Cards Row (Clock and ESP32) -->
+  <!-- Top Cards Row (Clock full width) -->
   <div class="top-cards-grid">
-    <!-- Clock and Date Card -->
+    <!-- Clock and Date Card (full row) -->
     <div class="clock-container">
       <div class="clock-card" id="clockCard">
         <div class="clock-background" id="clockBackground">
@@ -66,54 +66,8 @@
           <div class="time-display" id="currentTime">--:--:--</div>
           <div class="date-display" id="currentDate">Loading...</div>
           <div class="timezone-display" id="timezone">Local Time</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ESP32 System Info Card -->
-    <div class="esp32-container">
-      <div class="esp32-card">
-        <div class="esp32-background" id="esp32Background">
-          <!-- Dynamic circuit illustration will be inserted here -->
-        </div>
-        <div class="esp32-header">
-          <h2>🔧 ESP32 System Info</h2>
-        </div>
-        <div class="esp32-content">
-          <div class="esp32-metrics">
-            <div class="esp32-metric">
-              <span class="esp32-label">Domain:</span>
-              <span class="esp32-value" id="esp32Domain">Loading...</span>
-            </div>
-            <div class="esp32-metric">
-              <span class="esp32-label">IP Address:</span>
-              <span class="esp32-value" id="esp32IP">Loading...</span>
-            </div>
-            <div class="esp32-metric">
-              <span class="esp32-label">Free Heap:</span>
-              <span class="esp32-value" id="esp32Heap">Loading...</span>
-            </div>
-            <div class="esp32-metric">
-              <span class="esp32-label">Uptime:</span>
-              <span class="esp32-value" id="esp32Uptime">Loading...</span>
-            </div>
-            <div class="esp32-metric">
-              <span class="esp32-label">WiFi Mode:</span>
-              <span class="esp32-value" id="esp32WifiMode">Loading...</span>
-            </div>
-            <div class="esp32-metric">
-              <span class="esp32-label">HTTP Requests:</span>
-              <span class="esp32-value" id="esp32HttpReqs">Loading...</span>
-            </div>
-            <div class="esp32-metric">
-              <span class="esp32-label">BLE Adverts:</span>
-              <span class="esp32-value" id="esp32BleAdverts">Loading...</span>
-            </div>
-            <div class="esp32-metric">
-              <span class="esp32-label">CPU Usage:</span>
-              <span class="esp32-value" id="esp32CpuUsage">Loading...</span>
-            </div>
-          </div>
+          <div class="motd" id="motd" aria-live="polite"></div>
+          <div class="mini-calendar" id="miniCalendar"></div>
         </div>
       </div>
     </div>
@@ -122,6 +76,20 @@
   <!-- Sensor Status Cards -->
   <div class="sensor-cards" id="sensorCards">
     <!-- Dynamic sensor cards will be inserted here -->
+  </div>
+
+  <!-- Bottom Status Bar (ESP32 slim card) -->
+  <div class="status-bar" role="status" aria-label="ESP32 Status Bar">
+    <div class="status-metrics">
+      <span class="status-item"><strong>Domain:</strong> <span id="esp32Domain">--</span></span>
+      <span class="status-item"><strong>IP:</strong> <span id="esp32IP">--</span></span>
+      <span class="status-item"><strong>Heap:</strong> <span id="esp32Heap">--</span></span>
+      <span class="status-item"><strong>Uptime:</strong> <span id="esp32Uptime">--</span></span>
+      <span class="status-item"><strong>WiFi:</strong> <span id="esp32WifiMode">--</span></span>
+      <span class="status-item"><strong>HTTP:</strong> <span id="esp32HttpReqs">--</span></span>
+      <span class="status-item"><strong>BLE:</strong> <span id="esp32BleAdverts">--</span></span>
+      <span class="status-item"><strong>CPU:</strong> <span id="esp32CpuUsage">--</span></span>
+    </div>
   </div>
 
   <script src="/app.js"></script>

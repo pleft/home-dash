@@ -105,6 +105,11 @@ body::before {
     radial-gradient(circle at 75% 75%, rgba(99, 102, 241, 0.05) 0%, transparent 50%);
 }
 
+/* Ensure main content isn't hidden behind the fixed status bar */
+body {
+  padding-bottom: calc(1.5rem + 44px);
+}
+
 h1 {
   text-align: center;
   margin: 0 0 2rem;
@@ -187,70 +192,52 @@ h2 {
   transform: rotate(180deg);
 }
 
-/* Controls */
-.controls {
-  display: flex;
-  gap: 1.5rem;
-  justify-content: center;
-  align-items: center;
-  margin: 2rem auto;
-  flex-wrap: wrap;
-  background: var(--card-bg);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-xl);
-  padding: 1.5rem;
-  box-shadow: var(--shadow-lg);
-  max-width: 1400px;
-}
-
-.control-group {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.control-group label {
-  font-weight: 600;
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.control-group select {
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--secondary-bg);
-  color: var(--text-primary);
-  font-size: 0.875rem;
-  min-width: 160px;
-  transition: var(--transition);
-  cursor: pointer;
-}
-
-.control-group select:hover {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-}
-
-.control-group select:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
-}
+/* Controls removed (unused) */
 
 /* Top Cards Row (Clock and ESP32) */
 .top-cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  grid-template-columns: 1fr; /* clock full-width */
   gap: 1.5rem;
   margin: 2rem 0;
   max-width: 1400px;
   margin-left: auto;
   margin-right: auto;
+}
+
+/* Status bar at the bottom */
+.status-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  background: var(--card-bg);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border-color);
+  padding: 0.5rem 1rem;
+  box-shadow: 0 -6px 20px rgba(0,0,0,0.15);
+  z-index: 1000;
+}
+
+.status-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  justify-content: center;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.status-item {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.status-item strong {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 /* Clock Card */
@@ -356,131 +343,8 @@ h2 {
   color: rgba(255, 255, 255, 0.7);
 }
 
-/* ESP32 System Info Card */
-.esp32-container {
-  display: contents;
-}
-
-.esp32-card {
-  background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
-  border-radius: var(--radius-xl);
-  padding: 2rem;
-  box-shadow: var(--shadow-xl);
-  color: var(--text-primary);
-  text-align: left;
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  position: relative;
-  overflow: hidden;
-  min-height: 200px;
-}
-
-.esp32-background {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  opacity: 0.3;
-  z-index: 1;
-  pointer-events: none;
-}
-
-.esp32-background svg {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.esp32-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(45deg, transparent 30%, rgba(255, 255, 255, 0.05) 50%, transparent 70%);
-  transform: translateX(-100%);
-  transition: transform 0.6s ease;
-}
-
-.esp32-card:hover::before {
-  transform: translateX(100%);
-}
-
-.esp32-header {
-  position: relative;
-  z-index: 3;
-}
-
-.esp32-header h2 {
-  margin: 0 0 1.5rem;
-  font-size: 1.25rem;
-  font-weight: 600;
-  opacity: 0.9;
-  text-align: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-}
-
-.esp32-content {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  position: relative;
-  z-index: 3;
-}
-
-.esp32-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-
-@supports (display: grid) {
-  .esp32-metrics {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1rem;
-  }
-}
-
-.esp32-metric {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  transition: var(--transition);
-}
-
-.esp32-metric:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: var(--radius-sm);
-  padding-left: 0.5rem;
-  padding-right: 0.5rem;
-}
-
-.esp32-metric:last-child {
-  border-bottom: none;
-}
-
-.esp32-label {
-  font-weight: 500;
-  opacity: 0.9;
-  font-size: 0.875rem;
-  color: rgba(255, 255, 255, 0.8);
-}
-
-.esp32-value {
-  font-weight: 600;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-  font-size: 0.875rem;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  color: var(--text-primary);
-}
+/* Remove old ESP32 card spacing effects */
+/* .esp32-container, .esp32-card { display: none; } */
 
 /* Sensor Cards */
 .sensor-cards {
@@ -613,86 +477,10 @@ h2 {
 
 
 
-/* Charts */
-.charts {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 2rem;
-  max-width: 1400px;
-  margin: 2rem auto;
-}
-
-.chart-container {
-  background: var(--card-bg);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-xl);
-  padding: 2rem;
-  box-shadow: var(--shadow-lg);
-  position: relative;
-  overflow: hidden;
-}
-
-.chart-container::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(45deg, transparent 30%, rgba(99, 102, 241, 0.03) 50%, transparent 70%);
-  transform: translateX(-100%);
-  transition: transform 0.6s ease;
-  pointer-events: none;
-}
-
-.chart-container:hover::before {
-  transform: translateX(100%);
-}
-
-.chart-container h2 {
-  margin-top: 0;
-  color: var(--text-primary);
-  text-align: center;
-  font-size: 1.5rem;
-  font-weight: 600;
-  margin-bottom: 1.5rem;
-}
-
-.chart {
-  position: relative;
-  width: 100%;
-  height: 450px;
-  background: var(--secondary-bg);
-  border-radius: var(--radius-lg);
-  padding: 1rem;
-}
-
-canvas {
-  display: block;
-  width: 100% !important;
-  height: 100% !important;
-  border-radius: var(--radius-md);
-}
-
-/* iPad Safari chart optimizations */
-.ipad-device .chart {
-  height: 350px; /* Slightly smaller for iPad */
-}
-
-.ipad-device canvas {
-  /* Force proper rendering on iPad Safari */
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
-}
-
-/* iPad-specific optimizations */
-@media screen and (max-width: 1024px) and (min-width: 768px) {
-  .controls{gap:15px;flex-wrap:wrap}
-  .control-group select{min-width:180px}
-  .sensor-cards{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
-  .esp32-card{min-width:350px}
-  .chart{height:350px}
+/* Responsive adjustments for status bar */
+@media (max-width: 768px) {
+  .status-bar { padding: 0.4rem 0.75rem; }
+  .status-item { font-size: 0.8rem; }
 }
 
 /* Tablet adjustments */
@@ -705,9 +493,7 @@ canvas {
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   }
   
-  .esp32-metrics {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  /* .esp32-metrics removed (unused) */
 }
 
 /* Responsive */
@@ -748,28 +534,7 @@ canvas {
     font-size: 2.5rem;
   }
   
-  /* Mobile ESP32 card */
-  .esp32-card {
-    padding: 1.5rem;
-  }
-  
-  .esp32-metrics {
-    grid-template-columns: 1fr;
-    gap: 0.75rem;
-  }
-  
-  .esp32-metric {
-    padding: 0.5rem 0;
-    font-size: 0.85rem;
-  }
-  
-  .esp32-label {
-    font-size: 0.8rem;
-  }
-  
-  .esp32-value {
-    font-size: 0.8rem;
-  }
+  /* ESP32 card grid overrides removed (unused) */
   
   /* Mobile theme toggle */
   .theme-toggle {
@@ -805,7 +570,25 @@ canvas {
   transition: transform 0.1s ease;
 }
 
-@media (min-width: 1200px){
-  .charts{grid-template-columns:1fr}
-  .chart{height:450px}
+/* Remove sensor background visuals */
+/* .sensor-bg removed along with related overrides */
+/* Ensure stacking context remains simple */
+.sensor-card { position: relative; }
+.sensor-card > * { position: relative; z-index: 1; }
+.sensor-card.offline { filter: none; }
+
+/* Charts media query removed (unused) */
+
+.motd { margin-top: 0.5rem; font-size: 0.95rem; opacity: 0.95; }
+.mini-calendar { margin-top: 0.75rem; display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.mini-calendar .day { background: rgba(255,255,255,0.12); border-radius: var(--radius-md); padding: 6px 0; font-size: 0.8rem; }
+.mini-calendar .day.today { background: rgba(255,255,255,0.22); box-shadow: 0 0 0 2px rgba(255,255,255,0.25) inset; }
+.mini-calendar .wd { 
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)); 
+  color: #ffffff; 
+  font-weight: 800; 
+  font-size: 0.78rem; 
+  text-transform: uppercase; 
+  letter-spacing: 0.08em; 
+  box-shadow: inset 0 -2px 0 rgba(255,255,255,0.6), 0 2px 6px rgba(0,0,0,0.2);
 }
