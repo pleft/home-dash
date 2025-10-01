@@ -49,6 +49,7 @@
 #include <ESPmDNS.h>
 #include <time.h>
 #include <HTTPClient.h>
+#include <esp_heap_caps.h>
 
 // Forward declarations
 struct WifiCreds;
@@ -1600,7 +1601,7 @@ static void handleDataStream() {
 
   gHttpRequestsTotal++; gHttpDataRequests++; gLastHttpActivityMs = millis();
   gHttpDataBytes = 0;
-  LOG("[HTTP] GET /data - START - Free heap: " + String(ESP.getFreeHeap()));
+  Serial.printf("[HTTP] GET /data - START - Free heap: %u\n", ESP.getFreeHeap());
 
   http.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   http.sendHeader("Connection", "close");
@@ -1631,13 +1632,14 @@ static void handleDataStream() {
     if (i < gTagCount) t = gTags[i];
     portEXIT_CRITICAL(&gTagsMux);
 
-    // Use friendly name for better user experience
-    String friendly = friendlyName(t.mac);
+    // Use friendly name without allocating temporary Strings
+    char friendly[48];
+    getFriendlyNameCStr(t.mac, friendly, sizeof(friendly));
     snprintf(buf, sizeof(buf),
          "%s{\"mac\":\"%s\",\"name\":\"%s\",",
          (i ? "," : ""),
          t.mac.c_str(),
-         friendly.c_str());
+         friendly);
     sendChunk(buf);
 
     const char* tstr = fmtFloatOrNull(fbuf, sizeof(fbuf), t.t, 2);
@@ -1662,7 +1664,7 @@ static void handleDataStream() {
   sendChunk("]}");
   http.sendContent(""); // end chunked
   gDataInFlight = false;
-  LOG("[HTTP] GET /data - END - Bytes sent: " + String(gHttpDataBytes) + ", Free heap: " + String(ESP.getFreeHeap()));
+  Serial.printf("[HTTP] GET /data - END - Bytes sent: %lu, Free heap: %u\n", (unsigned long)gHttpDataBytes, ESP.getFreeHeap());
 }
 
 // (removed) /data_plain endpoint
@@ -1734,6 +1736,23 @@ static void handleHealth() {
   out += "}";
   http.send(200, "application/json", out);
 }
+
+// Expose heap/fragmentation metrics at /heap
+static void handleHeap() {
+  size_t freeH    = ESP.getFreeHeap();
+  size_t minH     = ESP.getMinFreeHeap();
+  size_t largest  = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  float  frag     = (freeH > 0) ? (1.0f - ((float)largest / (float)freeH)) : 0.0f;
+
+  String out; out.reserve(160);
+  out += F("{\"free\":"); out += (unsigned)freeH;
+  out += F(",\"min\":"); out += (unsigned)minH;
+  out += F(",\"largest\":"); out += (unsigned)largest;
+  out += F(",\"frag\":"); out += String(frag, 2);
+  out += "}";
+  http.send(200, "application/json", out);
+}
+
 static void handleReloadNames() { loadNamesCsv(); http.send(200, "text/plain", "names reloaded"); }
 static void handlePing()        { http.send(200, "text/plain", "OK"); }
 
@@ -1947,7 +1966,7 @@ void setup() {
   http.on("/app.js",       HTTP_GET,  handleStatic);
   http.on("/styles.css",   HTTP_GET,  handleStatic);
   http.on("/data",         HTTP_GET,  handleDataStream);
-  // (removed) http.on("/data_plain",   HTTP_GET,  handleDataPlain);
+  http.on("/heap",         HTTP_GET,  handleHeap);
   http.on("/health",       HTTP_GET,  handleHealth);
   http.on("/upload",       HTTP_GET,  handleUploadForm);
   http.on("/upload",       HTTP_POST, handleUploadPost, handleFileUpload);
@@ -1980,11 +1999,13 @@ void loop() {
   
   if (millis() - lastDebugPrint > 30000) {  // Debug print every 30 seconds
     lastDebugPrint = millis();
-    LOG("[DEBUG] Loop running - Free heap: " + String(ESP.getFreeHeap()) + 
-        " bytes, Min free: " + String(ESP.getMinFreeHeap()) + 
-        " bytes, CPU usage: " + String(gCpuUsage, 1) + "%" +
-        ", BLE adverts: " + String(gBleAdvertsSeen) +
-        ", HTTP requests: " + String(gHttpRequestsTotal));
+    size_t freeH = ESP.getFreeHeap();
+    size_t minH  = ESP.getMinFreeHeap();
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    float frag = (freeH > 0) ? (1.0f - ((float)largest / (float)freeH)) : 0.0f;
+    Serial.printf("[DEBUG] Free:%u Min:%u Largest:%u Frag:%.2f CPU:%.1f BLE:%lu HTTP:%lu\n",
+                  (unsigned)freeH, (unsigned)minH, (unsigned)largest, frag,
+                  (double)gCpuUsage, (unsigned long)gBleAdvertsSeen, (unsigned long)gHttpRequestsTotal);
   }
 
   // HTTP server watchdog - check if it's responsive
