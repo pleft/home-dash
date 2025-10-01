@@ -7,8 +7,8 @@ ESP32-based IoT dashboard for monitoring RuuviTag environmental sensors with TFT
 - **Real-time BLE scanning** for RuuviTag sensors (temperature, humidity, pressure, battery)
 - **TFT display** with card-based sensor layout
 - **Web dashboard** with live sensor cards (charts removed)
-– **WiFi + AP fallback** mode for easy setup
-– History storage and charts removed to simplify the system
+- **WiFi + AP fallback** mode for easy setup
+- **History storage and charts removed** to simplify the system
 
 ## Hardware Requirements
 
@@ -19,7 +19,7 @@ ESP32-based IoT dashboard for monitoring RuuviTag environmental sensors with TFT
 ## Quick Start
 
 ### Windows WSL Users
-For Windows users with WSL, see [README_WSL.md](README_WSL.md) for complete setup instructions including USB device sharing and PowerShell commands.
+For Windows users with WSL, see [README_WSL.md](README_WSL.md) for complete setup instructions including USB device sharing and PowerShell commands. Those instructions also show the exact commands to compile with `HAS_TFT=0` and the `no_ota` partition scheme.
 
 ### Standard Setup
 
@@ -35,33 +35,30 @@ arduino-cli lib install "NimBLE-Arduino" "TFT_eSPI"
 
 #### 2. Build and Upload
 ```bash
-# Compile firmware
-arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-path build home-dash.ino
+# Compile firmware (no_ota partition scheme)
+arduino-cli compile \
+  --fqbn esp32:esp32:esp32:PartitionScheme=no_ota \
+  --build-path build \
+  home-dash.ino
 
-# Upload firmware (replace COM6 with your port)
-arduino-cli upload -p COM6 --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-path build home-dash.ino
+# Upload firmware (replace your serial port)
+arduino-cli upload -p /dev/ttyUSB0 \
+  --fqbn esp32:esp32:esp32:PartitionScheme=no_ota \
+  --build-path build \
+  home-dash.ino
 ```
 
-#### 3. Upload Web Files
+#### 3. Upload Web Files (LittleFS)
 
-**Method 1: LittleFS Filesystem Uploader (Recommended)**
-1. Install "LittleFS Filesystem Uploader" in Arduino IDE
-2. Tools → ESP32 Sketch Data Upload
-3. Select `data` folder and upload
-
-**Method 2: Command Line (esptool)**
 ```bash
-# Create LittleFS image
-mklittlefs -c data -b 4096 -s 0x20000 data.littlefs.bin
+# Create LittleFS image (adjust size to your partition map if needed)
+mklittlefs -c data -b 4096 -s 0x1E0000 data.littlefs.bin
 
-# Upload LittleFS image (replace COM6 with your port)
-esptool --chip esp32 --port COM6 --baud 921600 write_flash 0x3D0000 data.littlefs.bin
+# Upload LittleFS image (replace port if needed)
+esptool --chip esp32 --port /dev/ttyUSB0 --baud 921600 write_flash 0x210000 data.littlefs.bin
 ```
 
-**Method 3: Web Interface**
-1. Connect to ESP32 (WiFi or AP mode)
-2. Go to `http://home.local/upload` or `http://192.168.4.1/upload`
-3. Upload files from `data` folder
+Alternatively, use the web uploader at `/upload`.
 
 #### 4. Access Dashboard
 - **WiFi Mode**: `http://home.local/` or ESP32 IP
@@ -86,22 +83,29 @@ AA:BB:CC:DD:EE:FF,Living Room
 
 ## Build Options
 
-**TFT Display (Default)**
+**TFT Display (default enabled)**
 ```bash
-arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-path build home-dash.ino
+arduino-cli compile \
+  --fqbn esp32:esp32:esp32:PartitionScheme=no_ota \
+  --build-path build \
+  home-dash.ino
 ```
 
 **Headless (No Display)**
 ```bash
-arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-property compiler.c.extra_flags="-DHAS_TFT=0" --build-property compiler.cpp.extra_flags="-DHAS_TFT=0" --build-path build home-dash.ino
+arduino-cli compile \
+  --fqbn esp32:esp32:esp32:PartitionScheme=no_ota \
+  --build-property compiler.cpp.extra_flags="-DHAS_TFT=0" \
+  --build-path build \
+  home-dash.ino
 ```
 
 ## Troubleshooting
 
 **Upload Issues**
-- Check COM port: `arduino-cli board list`
+- Check serial port: `arduino-cli board list`
 - Put ESP32 in boot mode (hold BOOT, press RESET, release RESET, release BOOT)
-- Try different USB cable
+- Try a different USB cable/port
 
 **WiFi Issues**
 - Use 2.4GHz network (ESP32 doesn't support 5GHz)
@@ -111,7 +115,6 @@ arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-
 **Display Issues**
 - Verify TFT_eSPI library configuration (see `display/README.md`)
 - Check wiring connections
-- Test with simple TFT code
 
 **Web Interface Issues**
 - Verify LittleFS files are uploaded
@@ -120,9 +123,9 @@ arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-
 
 ## Performance
 
-- **Program Storage**: ~1.3 MB (66% of available)
-- **Dynamic Memory**: ~58 KB (17% of available)
-- **Update Frequency**: Sensor data every 5s, display every 1s
+- **Program Storage**: ~1.41 MB (67% of 2MB app partition)
+- **Dynamic Memory**: ~60 KB (18% of 320KB)
+- **Update Frequency**: Sensor updates every 200ms (throttle), display every 500ms
 
 ## Project Structure
 
@@ -144,8 +147,9 @@ home-dash/
 
 ## API Endpoints
 
-- `GET /data` - Real-time sensor data
+- `GET /data`  - Real-time sensor data
 - `GET /health` - System metrics
+- `GET /heap`  - Heap and fragmentation metrics (free, min, largest, frag)
 - `GET /config` - WiFi configuration
 - `GET /upload` - File upload interface
 
